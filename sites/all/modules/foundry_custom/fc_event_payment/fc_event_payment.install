@@ -1,0 +1,107 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for the node module.
+ */
+function fc_event_payment_install() {
+  
+}
+function fc_event_payment_uninstall() {
+  
+}
+
+
+/**
+ * Implements hook_schema().
+ */
+function fc_event_payment_schema() {
+  $schema['event_payment'] = array(
+    'description' => 'Stores the payments for events',
+    'fields' => array(
+      'epid' => array(
+        'description' => 'The primary identifier for a node.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      // Defaults to NULL in order to avoid a brief period of potential
+      // deadlocks on the index.
+      'nid' => array(
+        'description' => 'The nid of the event',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'default' => NULL,
+      ),
+	  'payment_type' => array(
+        'description' => 'The type of payment for the event (deposit,fee,balance) ',
+        'type' => 'varchar',
+        'length' => 100,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'payment_method' => array(
+        'description' => 'Check/Credit Card or Cash',
+        'type' => 'varchar',
+        'length' => 100,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+	  'payment_reference' => array(
+        'description' => 'Check/Credit Card or Cash',
+        'type' => 'varchar',
+        'length' => 100,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+	  
+	  'amount' => array(
+	  	'type' => 'numeric',
+		'size' => 'normal',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'default' => NULL,
+      ),
+	  'date_due' => array(
+        'description' => 'Date the payment is due',
+        'type' => 'int',
+        'size' => 11,
+		'unsigned' => TRUE,
+        'not null' => FALSE,
+        'default' => NULL,
+	  ),
+	  'date_received' => array(
+        'description' => 'Date the payment was received',
+        'type' => 'int',
+        'size' => 11,
+		'unsigned' => TRUE,
+        'not null' => FALSE,
+        'default' => NULL,
+	  ),
+	  'weight' => array(
+        'description' => 'Controls the order of the payments',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'default' => NULL,
+      ),
+    ),
+    'unique keys' => array(
+      'epid' => array('epid'),
+    ),
+    'foreign keys' => array(
+      'uid' => array(
+        'table' => 'users',
+        'columns' => array('uid' => 'uid'),
+      ),
+	  'nid' => array(
+        'table' => 'node',
+        'columns' => array('nid' => 'nid'),
+      ),
+    ),
+    'primary key' => array('epid'),
+  );
+  
+  return $schema;
+}

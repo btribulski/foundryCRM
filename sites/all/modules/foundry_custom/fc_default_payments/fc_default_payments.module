@@ -1,0 +1,166 @@
+<?php
+
+/**
+ * @file
+ * Enables the ability to add default payments in the finacial tab an event
+ */
+
+
+
+/**
+ * Implements hook_field_extra_fields().
+ */
+function fc_default_payments_field_extra_fields() {
+  $extra['node']['event'] = array(
+    'form' => array(
+      'set_default_payments'=> array(
+        'label' => t('Set Default Payments Button'),
+        'description' => t('Button to Automatically Add Default Payment Entries'),
+        'weight' => -4,
+      ),
+
+    ),
+    /*
+	'display' => array(
+      'poll_view_voting' => array(
+        'label' => t('Poll vote'),
+        'description' => t('Poll vote'),
+        'weight' => 0,
+      ),
+    )
+	*/
+  );
+
+  return $extra;
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function fc_default_payments_form_alter(&$form, &$form_state, $form_id){
+	
+	if ($form_id =='event_node_form'){
+	  $form['set_default_payments']= array(
+		'#tree' => FALSE,
+		'#type' => 'fieldset',
+		'#collapsible' =>false,
+		'#weight' => -4,
+		'#prefix' => '<div id="default-payments-wrapper">',
+		'#suffix' => '</div>',
+	  );
+	  
+	  $form['set_default_payments']['action_button'] = array(
+		'#type' => 'submit',
+		'#value' => t('Add Default Payments'),
+		'#attributes' => array(
+		  'title' => t("Click Here to add in default payments and due dates that are required for events "),
+		),
+		'#weight' => 1,
+		'#submit' => array('fc_default_payments_add_defaults_submit'),
+		'#ajax' => array(
+		  'callback' => 'fc_default_payments_add_defaults_js',
+		  'wrapper' => 'payment-selection',
+		  'method' => 'replace',
+		  'effect' => 'fade',
+		),
+	  );
+	}
+}
+/* 
+ * functions to add in default payments
+ */
+ function fc_default_payments_add_defaults_submit($form, &$form_state) {
+  
+  $date_accepted = $form_state['input']['field_date_accepted']['und'][0]['value']['date'];
+  $date_accepted_timestamp = ($date_accepted=='')?time():strtotime($date_accepted);
+  $event_date = $form_state['input']['field_event_date']['und'][0]['value']['date'];
+  $event_timestamp = strtotime($event_date);
+  $total_cost = $form_state['input']['field_contract_price']['und'][0]['value'];
+  $weight = count($form_state['values']['payment'])+1;
+  
+  
+  
+  /*
+  watchdog('fc_default_payments','Date Accepted:' . $date_accepted);
+  watchdog('fc_default_payments','Date Accepted Timestamp' . $date_accepted_timestamp);
+  watchdog('fc_default_payments','Event Date: ' . $event_date);
+  watchdog('fc_default_payments','Event Date timestamp' . $event_timestamp);
+  */
+  
+  //check to see if previous entries are empty and if so get rid of them
+  foreach($form_state['values']['payment'] as $key => $payment){
+  	  if ( (!strlen($payment['amount']) || $payment['amount']==0) && $payment['payment_reference'] =='' && $payment['date_due'] ==''){
+		  watchdog('fc_default_payments','Should be deleting this payment entry:' . $key);
+		  unset($form_state['values']['payment'][$key]);
+	  }
+  }
+  
+  // Add in Deposit
+  $form_state['values']['payment'][]=array(
+			'epid'=>'', 
+			'payment_type'=>54, //Deposit
+			'payment_method'=>57, 
+			'payment_reference'=>'',
+			'amount'=>(intval($total_cost)*0.5),
+			//'date_due'=>date('Y-m-d',strtotime('+ 2 weeks', $date_accepted_timestamp)),
+			'date_due'=>strtotime('+ 2 weeks', $date_accepted_timestamp),
+			'date_received'=>null,
+			'weight'=>$weight,
+	 );
+	 $weight++;
+  
+  //Add in SHRC Fee 
+  $add_shrc=false;
+  foreach ($form_state['input']['field_location']['und'] as $key => $selected_room_tid){
+		if ($selected_room_tid==11 || $selected_room_tid==13){
+			$add_shrc=true;
+		}
+  }
+  if($add_shrc){
+	  $room_cost = intval(fc_location_costs_get_rate(11,$event_date));
+	  $form_state['values']['payment'][]=array(
+			'epid'=>'', 
+			'payment_type'=>60, //SHRC Fee
+			'payment_method'=>57, 
+			'payment_reference'=>'',
+			'amount'=>($room_cost * 0.40),
+			//'date_due'=>date('Y-m-d',(strtotime('- 60 days',$event_timestamp))),
+			'date_due'=>strtotime('- 60 days',$event_timestamp),
+			'date_received'=>null,
+			'weight'=>$weight,
+	 );
+	 $weight++;
+  }
+  //Add in Kitchen Fee
+   $form_state['values']['payment'][]=array(
+			'epid'=>'', 
+			'payment_type'=>61, //Kitchen Fee
+			'payment_method'=>57, 
+			'payment_reference'=>'',
+			'amount'=>'500',
+			//'date_due'=>date('Y-m-d',$event_timestamp),
+			'date_due'=>$event_timestamp,
+			'date_received'=>null,
+			'weight'=>$weight,
+	 );
+	 $weight++;
+  //Add in Food
+   $form_state['values']['payment'][]=array(
+			'epid'=>'', 
+			'payment_type'=>62, //Food 
+			'payment_method'=>57, 
+			'payment_reference'=>'',
+			'amount'=>'1000',
+			//'date_due'=>date('Y-m-d',$event_timestamp),
+			'date_due'=>$event_timestamp,
+			'date_received'=>null,
+			'weight'=>$weight,
+	 );
+	 $weight++;
+  $form_state['node']->payments = array_values($form_state['values']['payment']);	 
+  //unset($form_state['input']['payment']);
+  $form_state['rebuild'] = TRUE;
+}
+function fc_default_payments_add_defaults_js ($form, $form_state) {
+  return $form['payments_wrapper']['payment'];
+}

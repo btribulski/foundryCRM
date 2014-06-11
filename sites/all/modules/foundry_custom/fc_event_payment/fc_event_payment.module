@@ -1,0 +1,729 @@
+<?php
+
+/**
+ * @file
+ * Enables the ability to add multiple payments to an event
+ */
+
+//set the tid of the payment types that should not be applied to the contract price and balance due calculations 
+define('NON_CONTRACT_PAYMENT_TYPES','60,61,62,77');
+define('CANCELLATION_FEE',750); 
+
+/** Here is a nice little debug cut and paste
+	foreach ($variables as $key=>$value) {
+		drupal_set_message('Line xxx: Key: '.$key.' Value: '.$value);
+	}
+*/
+function fc_event_payment_init() {
+	drupal_add_js(drupal_get_path('module','fc_event_payment').'/js/jquery-numeric-only.js');
+}
+/**
+ * Implements hook_permission().
+ */
+function fc_event_payment_permission() {
+  $perms = array(
+    'manage event payments' => array(
+      'title' => t('Manage Event payments'),
+    ),
+  );
+
+  return $perms;
+}
+/**
+ * Implements hook_menu().
+ */
+function fc_event_payment_menu() {
+
+	$items['fc-event-payment/company-autocomplete'] = array(
+		'page callback' => 'fc_event_payment_company_autocomplete',
+		'access arguments' => array('manage event payments'),
+		'type' => MENU_CALLBACK
+	);
+  return $items;
+}
+/**
+ * Implements hook_theme().
+ */
+
+function fc_event_payment_theme($existing, $type, $theme, $path) {
+  $theme_hooks = array(
+    'event_payment_entry_table' => array(
+  	  'render element' => 'form',
+      'file' => 'theme.inc',
+      'path' => $path . '/theme',
+    ),
+  );
+  return $theme_hooks;
+}
+function fc_event_payment_views_api(){
+ return array(
+ 	'api'=>'3.0',
+	'path' => drupal_get_path('module', 'fc_event_payment') .'/views',
+	//'file'=> 'fc_event_payment.views.inc',
+	);
+}
+
+
+/**
+ * Implements hook_field_extra_fields().
+ */
+function fc_event_payment_field_extra_fields() {
+  $extra['node']['event'] = array(
+    'form' => array(
+      'payments_wrapper' => array(
+        'label' => t('Event payments'),
+        'description' => t('payments for this event'),
+        'weight' => -4,
+      ),
+	  
+    ),
+    /*
+	'display' => array(
+      'poll_view_voting' => array(
+        'label' => t('Poll vote'),
+        'description' => t('Poll vote'),
+        'weight' => 0,
+      ),
+    )
+	*/
+  );
+
+  return $extra;
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function fc_event_payment_form_alter(&$form, &$form_state, $form_id){
+	
+	if ($form_id =='event_node_form'){
+	$node = $form_state['node'];
+	
+	$form_state['cache'] = TRUE;
+	 if (isset($form_state['payments_count'])) {
+		$payments_count = $form_state['payments_count'];
+	  }
+	  else {
+		$payments_count = max(2, empty($node->payment) ? 2 : count($node->payment));
+	  }
+	  
+	  // Add a wrapper for the payments and more button.
+	  $form['payments_wrapper'] = array(
+		'#title' => t('Payments'),
+		'#tree' => FALSE,
+		'#type' => 'fieldset',
+		'#collapsible' =>false,
+		'#weight' => -4,
+		'#prefix' => '<div id="payments-wrapper">',
+		'#suffix' => '</div>',
+	  );
+	
+	  // Container for just the individual payment selection.
+	  $form['payments_wrapper']['payment'] = array(
+		'#prefix' => '<div id="payment-selection">',
+		'#suffix' => '</div>',
+		'#theme' => 'event_payment_entry_table',
+	  );
+	  
+	// Add the current selections to the form.
+	  $delta = 0;
+	  $weight = 0;
+	  //foreach ($node->payments as $key=>$value) {
+		if (isset($node->payments)) {
+			$delta = count($node->payments);
+			foreach ($node->payments as $epid => $payment) {
+			  $key = 'epid-' . $epid;
+			  $form['payments_wrapper']['payment'][$key] = _payment_selection_form($key, $payment['epid'], $payment['payment_type'],$payment['payment_method'],$payment['payment_reference'],$payment['amount'],$payment['date_due'],$payment['date_received'], $payment['weight'], $payments_count);
+			  $weight = max($payment['weight'], $weight);
+			}
+	  	}
+	  //}
+	  // Add initial or additional choices.
+	  $existing_delta = $delta;
+	  for ($delta; $delta < $payments_count; $delta++) {
+		//$key = 'new:' . ($delta - $existing_delta);
+		$key = 'new-' . ($delta);
+		
+		// Increase the weight of each new choice.
+		$weight++;
+		$form['payments_wrapper']['payment'][$key] = _payment_selection_form($key, NULL, '', '', '', '', null, null, $weight, $payments_count);
+	  }
+	  
+	  // We name our button 'poll_more' to avoid conflicts with other modules using
+	  // Ajax-enabled buttons with the id 'more'.
+	  $form['payments_wrapper']['payments_more'] = array(
+		'#type' => 'submit',
+		'#value' => t('More payments'),
+		'#attributes' => array(
+		  'title' => t("If the amount of boxes above isn't enough, click here to add more payments."),
+		),
+		'#weight' => 1,
+		'#limit_validation_errors' => array(array('payment')),
+		'#submit' => array('fc_event_payment_more_payments_submit'),
+		'#ajax' => array(
+		  'callback' => 'fc_event_payment_selection_js',
+		  'wrapper' => 'payment-selection',
+		  'method' => 'replace',
+		  'effect' => 'fade',
+		),
+	  );
+	  
+	 /*
+	 $form['payments_wrapper']['debug_area'] = array(
+	  	'#type' => 'markup',
+		'#prefix' => '<div id="payment-debug-area">',
+		'#suffix' => '</div>',
+		'#markup' => 'debug text will go here: Remove me on lines 171-176 of fc_event_payment.module',
+	  );
+	 */
+	  $form['#validate'][]='fc_event_payment_node_form_validate'; //add on custom validation for this piece
+	}
+}
+/**
+ * Submit handler to add more choices to a poll form.
+ *
+ * This handler is run regardless of whether JS is enabled or not. It makes
+ * changes to the form state. If the button was clicked with JS disabled, then
+ * the page is reloaded with the complete rebuilt form. If the button was
+ * clicked with JS enabled, then ajax_form_callback() calls poll_choice_js() to
+ * return just the changed part of the form.
+ */
+function fc_event_payment_more_payments_submit($form, &$form_state) {
+  // If this is a Ajax POST, add 1, otherwise add 5 more choices to the form.
+  if ($form_state['values']['payments_more']) {
+    $n = $_GET['q'] == 'system/ajax' ? 1 : 5;
+    $form_state['payments_count'] = count($form_state['values']['payment']) + $n;
+  }
+  // Renumber the choices. This invalidates the corresponding key/value
+  // associations in $form_state['input'], so clear that out. This requires
+  // poll_form() to rebuild the choices with the values in
+  // $form_state['node']->choice, which it does.
+  $form_state['node']->payments = array_values($form_state['values']['payment']);
+  unset($form_state['input']['payment']);
+  $form_state['rebuild'] = TRUE;
+}
+function _payment_selection_form($key, $epid = NULL, $payment_type = '', $payment_method = '', $payment_reference='', $amount='',$date_due=null,$date_received=null, $weight = 0, $size = 10) {
+  $form = array(
+    '#tree' => TRUE,
+    '#weight' => $weight,
+  );
+
+  // We'll manually set the #parents property of these fields so that
+  // their values appear in the $form_state['values']['choice'] array.
+  $form['form_start'] = array(
+  	'#type' => 'markup',
+	'#value' => '<div id="payment-subform-'.$key.'">',
+	);
+  
+  $form['epid'] = array(
+    '#type' => 'value',
+    '#value' => $epid,
+    '#parents' => array('payment', $key, 'epid'),
+  );
+
+  $destination = $_GET['q'];
+  $form['payment_type'] = array(
+    '#type' => 'select',
+    '#title' => t('Payment type'),
+    //'#title_display' => 'invisible',
+    '#default_value' => $payment_type,
+	'#options' => fc_event_payment_taxonomy_select_options(12), // payment_type = 12
+	'#multiple'=> false,
+	//'#size' => 1,
+    '#parents' => array('payment', $key, 'payment_type'),
+	'#ajax' => array(
+			'event'=> 'change',
+			'callback' => 'fc_event_payment_payment_type_handler',
+			//'wrapper' => 'field-balance-due-add-more-wrapper',
+			'method' => 'replace',
+			'effect' => 'fade',
+	),
+	'#indx' => $key,
+  );
+
+  $form['payment_method'] = array(
+    '#type' => 'select',
+    '#title' => t('Method of payment'),
+    '#title_display' => 'invisible',
+    '#default_value' => $payment_method,
+    '#options' => fc_event_payment_taxonomy_select_options(13), // payment_method = 13
+	'#multiple'=> false,
+	//'#size' => 1,
+    '#parents' => array('payment', $key, 'payment_method'),
+	'#prefix' => '<div id="payment-method-' . $key . '-ajax-wrapper">',
+	'#suffix' => '</div>',
+	
+	
+	
+  );
+  $form['payment_reference'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Reference #'),
+    '#title_display' => 'invisible',
+    '#default_value' => $payment_reference,
+    '#size' => 10,
+    '#maxlength' => 100,
+    '#parents' => array('payment', $key, 'payment_reference'),
+  );
+  $form['amount'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Amount'),
+    '#title_display' => 'invisible',
+    '#default_value' => $amount,
+    '#size' => 10,
+    '#attributes' => array('class' => array('numeric-input')),
+    '#parents' => array('payment', $key, 'amount'),
+	'#prefix' => '<div id="payment-amount-' . $key . '-ajax-wrapper">',
+	'#suffix' => '</div>',
+	'#ajax' => array(
+			'event'=> 'change',
+			'callback' => 'fc_event_payment_update_balance_due_js',
+			//'wrapper' => 'field-balance-due-add-more-wrapper',
+			'method' => 'replace',
+			'effect' => 'fade',
+		),
+  );
+  //We need to make sure the passed $date_due and $date_received are timestamps
+  $date_due = fc_event_payment_get_valid_timestamp($date_due);
+  $date_received =fc_event_payment_get_valid_timestamp($date_received);
+  
+  $form['date_due'] = array(
+    '#type' => 'date_popup',
+    '#title' => t('Date Due'),
+    '#title_display' => 'invisible',
+    '#default_value' => (!is_null($date_due)) ? date("Y-m-d h:i:s",$date_due): null,
+    '#date_format' => 'm/d/Y',
+	'#date_year_range' => '0:+3',
+    //'#size' => 12,
+    '#parents' => array('payment', $key, 'date_due'),
+	'#prefix' => '<div id="payment-date-due-' . $key . '-ajax-wrapper">',
+	'#suffix' => '</div>',
+  );
+  $form['date_received'] = array(
+    '#type' => 'date_popup',
+    '#title' => t('Date Received'),
+    '#title_display' => 'invisible',
+    '#default_value' => (!is_null($date_received)) ? date("Y-m-d h:i:s",$date_received) : null,
+    '#date_format' => 'm/d/Y',
+	'#date_year_range' => '0:+3',
+    //'#size' => 12,
+    '#parents' => array('payment', $key, 'date_received'),
+	'#prefix' => '<div id="payment-date-received-' . $key . '-ajax-wrapper">',
+	'#suffix' => '</div>',
+	'#ajax' => array(
+			'event'=> 'change',
+			'callback' => 'fc_event_payment_update_balance_due_js',
+			//'wrapper' => 'field-balance-due-add-more-wrapper',
+			'method' => 'replace',
+			'effect' => 'fade',
+		),
+  );
+  /*
+  $form["deleter"] = array(
+      '#type' => 'submit',
+      '#name' => "deleter-$key",
+      '#value' => t('Delete'),
+      '#indx' => $key, // index for deletion
+      '#submit' => array('fc_event_payment_del_payment'),
+      '#ajax' => array(
+        'callback' => 'fc_event_payment_del_payment_callback',
+        'progress' => array('type' => 'none'),
+      ),
+    );
+  */
+  $form['weight'] = array(
+    '#type' => 'hidden',
+    '#default_value' => $weight,
+    '#delta' => $size,
+    '#parents' => array('payment', $key, 'weight'),
+  );
+  $form['form_end'] = array(
+  	'#type' => 'markup',
+	'#value' => '</div>',
+	);
+  return $form;
+}
+/**
+ * Ajax callback in response to new payments being added to the form.
+ *
+ * This returns the new page content to replace the page content made obsolete
+ * by the form submission.
+ *
+ * @see fc_event_payment_more_payments_submit()
+ */
+function fc_event_payment_selection_js($form, $form_state) {
+  return $form['payments_wrapper']['payment'];
+}
+
+
+/**
+ * Form submit handler for node_form().
+ *
+ * Upon preview and final submission, we need to renumber payment and
+ * create a teaser output.
+ */
+function fc_event_payment_node_form_submit(&$form, &$form_state) {
+  // Renumber choices.
+  //$form_state['values']['payment'] = array_values($form_state['values']['payment']);
+  //$form_state['values']['teaser'] = fc_event_payment_teaser((object) $form_state['values']);
+}
+
+/**
+ * Implements hook_load().
+ */
+function fc_event_payment_node_load($nodes,$types) {
+	global $user;
+	foreach ($nodes as $node) {
+  		// Load the appropriate payments.
+		$payments = db_select('event_payment', 'ep')
+		  ->addTag('translatable')
+		  ->fields('ep', array('epid', 'payment_type', 'payment_method','payment_reference','amount','date_due','date_received','weight'))
+		  ->condition('ep.nid', $node->nid)
+		  ->orderBy('weight')
+		  ->execute()->fetchAllAssoc('epid', PDO::FETCH_ASSOC);
+	  
+		}
+		
+		
+	$nodes[$node->nid]->payments = $payments;	
+}
+/**
+ * Implements hook_insert().
+ */
+function fc_event_payment_node_insert($node) {
+	 if(isset($node->payments)){
+		  foreach ($node->payments as $payment) {
+				if ($payment['amount'] > 0) {
+				  /*
+				  db_insert('event_payment')
+					->fields(array(
+					  'nid' => $node->nid,
+					  'payment_type'=>$payment['payment_type'],
+					  'payment_method'=>$payment['payment_method'],
+					  'payment_reference'=>$payment['payment_reference'],
+					  'amount'=>$payment['amount'],
+					  'date_due' => $payment['date_due'],
+					  'date_received' => $payment['date_received'],
+					  'weight' => $payment['weight'],
+					))
+					->execute();
+					*/
+					//Added this so empty values do not get passed
+					  $insert_array=array();
+					  $insert_array['nid']=$node->nid;
+					  foreach($payment as $key=>$value){
+						 if(strlen($value)>0){
+							 if($key == 'date_due' || $key =='date_received') $value = strtotime($value);
+							 $insert_array[$key] = $value;
+						 }
+					  }
+					  db_insert('event_payment')
+						->fields($insert_array)
+						->execute();
+				}
+		  }
+	 }
+}
+/**
+ * Implements hook_update().
+ */
+function fc_event_payment_node_update($node) {
+  // Poll choices with empty titles signifies removal. We remove all votes to
+  // the removed options, so people who voted on them can vote again.
+  if(isset($node->payment)){
+	  foreach ($node->payment as $key => $payment) {
+		if ($payment['amount']>0) {
+		  if(!empty($payment['epid'])){
+			  db_merge('event_payment')
+				->key(array('epid' => $payment['epid']))
+				->fields(array(
+				  'payment_type'=>$payment['payment_type'],
+				  'payment_method'=>$payment['payment_method'],
+				  'payment_reference'=>$payment['payment_reference'],
+				  'amount'=>$payment['amount'],
+				  'date_due' => ($payment['date_due']=='' || is_null($payment['date_due']) ) ? null : strtotime($payment['date_due']),
+				  'date_received' => ($payment['date_received']=='' || is_null($payment['date_received']) ) ? null : strtotime($payment['date_received']),
+				  'weight' => $payment['weight'],
+				))
+				->execute();
+		  }
+		  else {
+			  //Added this so empty values do not get passed
+			 unset($insert_array);
+			 $insert_array=array();
+			 $insert_array['nid']=$node->nid;
+			 foreach($payment as $key=>$value){
+				 if(strlen($value)>0){
+					 if($key == 'date_due' || $key =='date_received') { $value = strtotime($value);}
+					 $insert_array[$key] = $value;
+				 }
+				 
+			  }
+			  db_insert('event_payment')
+				->fields($insert_array)
+				->execute();
+		  }
+		}
+		else {
+		  db_delete('event_payment')
+			->condition('nid', $node->nid)
+			->condition('epid', $payment['epid'])
+			->execute();
+		}
+	  }
+  }
+}
+
+/**
+ * Implements hook_delete().
+ */
+function fc_event_payment_node_delete($node) {
+  db_delete('event_payment')
+    ->condition('nid', $node->nid)
+    ->execute();
+ 
+}
+/**
+ * Creates a simple teaser that lists all the choices.
+ *
+ * This is primarily used for RSS.
+ */
+function fc_event_payment_teaser($node) {
+  $teaser = NULL;
+  if (is_array($node->payments)) {
+    foreach ($node->payments as $k => $payment) {
+      if ($payment['amount'] >0) {
+        $teaser .= '* ' . check_plain($payment['amount']) . "\n";
+      }
+    }
+  }
+  return $teaser;
+}
+
+
+function fc_event_payment_taxonomy_select_options($vid) {
+	$terms = taxonomy_get_tree($vid);
+	$select_option_values = array();
+	foreach ($terms as $term) {	
+	$select_option_values[$term->tid] = $term->name;	}
+	return $select_option_values;
+}
+function fc_event_payment_payment_type_handler($form, &$form_state) {
+	//find if the event has a cancellation fee/ is cancelled
+	$event_cancelled = false;
+	$ajax_commands =  array('#type' => 'ajax');
+	$debugger = '<div id="payment-debug-area">';
+	
+	foreach($form_state['values']['payment'] as $key=>$payment){
+		if($payment['payment_type'] == 78 && ($payment['amount']>0)){
+			$event_cancelled= true;
+			$debugger .= 'Line 518: We found a cancellation<br>';
+		}
+	}
+	/*
+	if (!$event_cancelled){
+		//Will update the room cost back to the correct value if event is "uncancelled"
+		$total_cost = fc_location_costs_get_total_cost($form_state);
+		$form['field_contract_price']['und'][0]['value']['#value'] = $total_cost;
+		$form_state['values']['field_contract_price']['und'][0]['value'] = $total_cost;
+		$ajax_commands['#commands'][] = ajax_command_replace("#field-contract-price-ajax-wrapper", render($form['field_contract_price']['und'][0]['value']));
+	}
+	*/
+	
+	
+		/*
+		 * if payment_type is cancellation fee
+		 */
+		 
+		if ($form_state['triggering_element']['#value']==78 ){
+			$key = $form_state['triggering_element']['#indx'];
+			$debugger .= 'KEY:' . $key .'<br>';
+			
+			$total_cost = CANCELLATION_FEE;
+			$form['field_contract_price']['und'][0]['value']['#value'] = CANCELLATION_FEE;
+			$form_state['values']['field_contract_price']['und'][0]['value'] = CANCELLATION_FEE;
+			$total_received = fc_event_payment_total_received($form_state);
+			$non_contract = fc_event_payment_non_contract_payments($form_state);
+			$form['field_balance_due']['und'][0]['value']['#value'] = $total_cost - ($total_received + $non_contract);
+			$form['payments_wrapper']['payment'][$key]['amount']['#value']= CANCELLATION_FEE;
+			$form_state['values']['payment'][$key]['amount'] =  CANCELLATION_FEE;
+			
+			$debugger .= 'Total Received:' . $total_received .'<br>';
+			$debugger .= 'Non Contract:' . $non_contract .'<br>';
+			$debugger .= 'Balance Due:' . ($total_cost - $total_received + $non_contract) .'<br>';
+			
+			unset($ajax_commands['#commands']);
+			$ajax_commands['#commands'][] = ajax_command_replace('#payment-amount-' . $key . '-ajax-wrapper', render($form['payments_wrapper']['payment'][$key]['amount']));
+			$ajax_commands['#commands'][] = ajax_command_replace("#field-balance-due-ajax-wrapper", render($form['field_balance_due']['und'][0]['value']));
+			$ajax_commands['#commands'][] = ajax_command_replace("#field-contract-price-ajax-wrapper", render($form['field_contract_price']['und'][0]['value']));
+			
+		}
+		/*
+		 * Handle the Military Discount
+		 */
+		if ($form_state['triggering_element']['#value']==76 && !$event_cancelled){	
+			$key = $form_state['triggering_element']['#indx'];
+			$total_cost = fc_location_costs_get_total_cost($form_state);
+			$form['field_contract_price']['und'][0]['value']['#value'] = $total_cost;
+			$form_state['values']['field_contract_price']['und'][0]['value'] = $total_cost;
+			
+			$military_discount = ($total_cost * 0.1);
+			
+			$form['payments_wrapper']['payment'][$key]['amount']['#value']=$military_discount;
+			$form_state['values']['payment'][$key]['amount']= $military_discount;
+			$form['payments_wrapper']['payment'][$key]['payment_method']['#value']=79; // Taxonomy Term ID for Discount
+			$form['payments_wrapper']['payment'][$key]['date_due']['date']['#value']=date("m/d/Y");
+			$form['payments_wrapper']['payment'][$key]['date_received']['date']['#value']=date("m/d/Y");
+			$form_state['values']['payment'][$key]['date_due']=date("Y-m-d h:i:s");
+			$form_state['values']['payment'][$key]['date_received']=date("Y-m-d h:i:s");
+			
+			
+			$total_received = fc_event_payment_total_received($form_state);
+			$non_contract = fc_event_payment_non_contract_payments($form_state);
+			$form['field_balance_due']['und'][0]['value']['#value'] = $total_cost - $total_received + $non_contract;
+			$form_state['values']['field_balance_due']['und'][0]['value'] = $total_cost - $total_received + $non_contract;
+			
+			$ajax_commands['#commands'][] = ajax_command_replace('#payment-amount-' . $key . '-ajax-wrapper', render($form['payments_wrapper']['payment'][$key]['amount']));
+			$ajax_commands['#commands'][] = ajax_command_replace('#payment-method-' . $key . '-ajax-wrapper', render($form['payments_wrapper']['payment'][$key]['payment_method']));
+			$ajax_commands['#commands'][] = ajax_command_replace('#payment-date-due-' . $key . '-ajax-wrapper', render($form['payments_wrapper']['payment'][$key]['date_due']));
+			$ajax_commands['#commands'][] = ajax_command_replace('#payment-date-received-' . $key . '-ajax-wrapper', render($form['payments_wrapper']['payment'][$key]['date_received']));
+			$ajax_commands['#commands'][] = ajax_command_replace("#field-balance-due-ajax-wrapper", render($form['field_balance_due']['und'][0]['value']));
+			$ajax_commands['#commands'][] = ajax_command_replace("#field-contract-price-ajax-wrapper", render($form['field_contract_price']['und'][0]['value']));
+				  	  
+		}
+		/*
+		 * Recalculate Contract Fee and Values When any other item is selected 
+		 */
+		if (($form_state['triggering_element']['#value']!=76 || $form_state['triggering_element']['#value']!=78 ) && !$event_cancelled){
+			$total_cost = $form_state['values']['field_contract_price']['und'][0]['value'];
+			$total_received = fc_event_payment_total_received($form_state);
+			$non_contract = fc_event_payment_non_contract_payments($form_state);
+			//Take care of total cost being erroneously set to cancellation fee
+			if(!$event_cancelled && ( (int) $form_state['values']['field_contract_price']['und'][0]['value'] == CANCELLATION_FEE)){
+				$total_cost = fc_location_costs_get_total_cost($form_state);
+				$form_state['values']['field_contract_price']['und'][0]['value'] =  $total_cost;
+				$form['field_contract_price']['und'][0]['value']['#value'] = $total_cost;
+			}
+			//Update the Balance Due 
+			$form_state['values']['field_balance_due']['und'][0]['value'] = $total_cost - $total_received + $non_contract;
+			$form['field_balance_due']['und'][0]['value']['#value'] = $total_cost - $total_received + $non_contract;
+			
+			$ajax_commands['#commands'][] = ajax_command_replace("#field-balance-due-ajax-wrapper", render($form['field_balance_due']['und'][0]['value']));
+			$ajax_commands['#commands'][] = ajax_command_replace("#field-contract-price-ajax-wrapper", render($form['field_contract_price']['und'][0]['value']));
+			
+		}
+	//}
+	//debug stuff
+	//$debugger .= '<pre>' . var_export($form_state['triggering_element'],TRUE) . '</pre>';
+	$debugger .= '<pre>' . var_export($ajax_commands,TRUE) . '</pre>';
+	$debugger .= '</div>';
+	$debug_commands = array('#type' => 'ajax');
+	//$debug_commands['#commands'][] = ajax_command_replace("#payment-debug-area", $debugger);
+	return $ajax_commands;
+	//return $debug_commands;
+}
+
+function fc_event_payment_update_balance_due_js($form, &$form_state) {
+	$total_cost = $form_state['values']['field_contract_price']['und'][0]['value'];
+	$total_received = fc_event_payment_total_received($form_state);
+	$non_contract = fc_event_payment_non_contract_payments($form_state);
+	
+	$form['field_balance_due']['und'][0]['value']['#value'] = $total_cost - $total_received + $non_contract;
+	$form_state['values']['field_balance_due']['und'][0]['value'] = $total_cost - $total_received + $non_contract;
+	
+	//return $form['field_balance_due']['und'][0]['value'];
+	return array(
+    '#type' => 'ajax',
+    '#commands' => array(
+      //ajax_command_replace("#field-contract-price-add-more-wrapper", render($form['field_contract_price']['und'][0]['value'])),
+	  //ajax_command_replace("#field-deposits-received-add-more-wrapper", render($form['field_deposits_received']['und'][0]['value'])),
+	  //ajax_command_replace("#field-balance-due-add-more-wrapper", render($form['field_balance_due']['und'][0]['value'])),
+	  ajax_command_replace("#field-balance-due-ajax-wrapper", render($form['field_balance_due']['und'][0]['value'])),
+    ),
+  );
+
+}
+function fc_event_payment_node_form_validate($form, &$form_state){
+	foreach($form_state['values']['payment'] as $key=>$payment){
+		if(strlen($payment['amount']) && !is_numeric($payment['amount'])){
+			form_set_error('payment['.$key.'][amount]','You need to enter a numeric value for the amount');
+		}
+	}
+	/*
+	//Update the total and balance due to be the proper values
+	*/
+	$event_cancelled=false;
+	foreach($form_state['values']['payment'] as $key=>$payment){
+		if($payment['payment_type'] == 78 && ($payment['amount']>0)){
+			$event_cancelled= true;
+		}
+	}
+	$total_cost = $form_state['values']['field_contract_price']['und'][0]['value'];
+	$total_received = fc_event_payment_total_received($form_state);
+	$non_contract = fc_event_payment_non_contract_payments($form_state);
+	//Take care of total cost being erroneously set to cancellation fee
+	if(!$event_cancelled && ($form_state['values']['field_contract_price']['und'][0]['value'] == CANCELLATION_FEE)){
+		$total_cost = fc_location_costs_get_total_cost($form_state);
+		$form_state['values']['field_contract_price']['und'][0]['value'] =  $total_cost;
+	}
+	//Update the Balance Due 
+	$form_state['values']['field_balance_due']['und'][0]['value'] = $total_cost - $total_received + $non_contract;
+	
+}
+function fc_event_payment_total_received($form_state){
+	$total_received=0;
+	foreach($form_state['values']['payment'] as $payment){
+		if($payment['date_received']){
+			if(strtotime($payment['date_received']) < time()){
+				$total_received +=$payment['amount'];
+			}
+		}
+	}
+	return $total_received;
+}
+function fc_event_payment_non_contract_payments($form_state){
+	$total_received=0;
+	$non_contract_types = explode(',',NON_CONTRACT_PAYMENT_TYPES);
+	
+	foreach($form_state['values']['payment'] as $payment){
+		if($payment['date_received'] && (in_array($payment['payment_type'],$non_contract_types))){
+			if(strtotime($payment['date_received']) < time()){
+				$total_received +=$payment['amount'];
+			}
+		}
+	}
+	return $total_received;
+}
+
+function fc_event_payment_get_valid_timestamp($timestamp){
+   //if ( ( (string) (int) $timestamp === $timestamp) ) {
+   if ( is_numeric($timestamp) && ( (int) $timestamp == $timestamp) ) {	   
+   	 //this is an integer so just pass it back
+	 return $timestamp;
+   }
+   elseif (is_null($timestamp)){
+	   return null;
+   }
+   else {
+	   return strtotime($timestamp);
+   }
+}
+function fc_event_payment_del_payment_callback ($form, &$form_state) {
+  $indx = $form_state['triggering_element']['#indx'];
+  // some server side delete logic in here if needed
+  //dsm('In case you are wondering the indx=' .$indx);
+  unset($form['payments_wrapper']['payment'][$indx]);
+  unset($form_state['values']['payment'][$indx]);
+  unset($form_state['input']['payment'][$indx]);
+  $key = str_replace('epid-','',$indx);
+  $key = str_replace('new-','',$key);
+  unset($form_state['node']->payments[$key]);
+  
+  $selector = "#items-del-".$indx;
+  $commands = array();
+  $commands[] = ajax_command_remove($selector);
+  return array('#type' => 'ajax', '#commands' => $commands);
+}
+function fc_event_payment_del_payment($form, &$form_state){
+	//nothing to see here .... move along
+}

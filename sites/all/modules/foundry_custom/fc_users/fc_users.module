@@ -1,0 +1,183 @@
+<?php
+
+/**
+ * @file
+ * Provides a views style plugin for FullCalendar
+ */
+
+require_once('blocks.inc');
+
+/**
+ * Implements hook_views_api().
+ */
+function fc_users_views_api() {
+  return array(
+    'api' => '3',
+    'path' => drupal_get_path('module', 'fc_users') . '/includes/views',
+  );
+}
+
+/**
+ * Implements hook_theme().
+ */
+
+function fc_users_theme($existing, $type, $theme, $path) {
+  return array(
+    'fc_users_event' => array(
+      'variables' => array(
+        'event' => NULL,
+        'entity' => NULL,
+      ),
+      'file' => 'theme.inc',
+      'path' => $path . '/theme',
+    ),
+  );
+}
+
+
+
+/**
+ * Implements hook_permission().
+ *
+ * @return array
+ *   An array of valid permissions for the FullCalendar module.
+ */
+function fc_users_permission() {
+  return array(
+    'update any fullcalendar event' => array(
+      'title' => t('Update any FullCalendar event'),
+      'description' => t('Allow user to edit events, ignoring other permissions.'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_menu().
+ *
+ * @return array
+ *   An array of menu items.
+ */
+function fc_users_menu() {
+  $items = array();
+
+  return $items;
+}
+
+function fc_users_form_alter(&$form, &$form_state, $form_id){
+	global $user;
+	
+	if ($form_id=='user_register_form' || $form_id =='user_profile_form') {
+		if(isset($_GET['cust-type'])){
+			switch($_GET['cust-type']){
+				case 'customer':
+					drupal_set_title("Customer Account");
+					$form['field_account_type']['und']['#default_value']=array(1);
+					break;
+				case 'vendor':
+					drupal_set_title("Vendor Account");
+					$form['field_account_type']['und']['#default_value']=array(2);
+					break;
+			}
+		}
+	 
+	 /*
+	  * Put the username and password fields in a collapsed fieldset and 
+	  * Add default values to the username -> using first name and lastname
+	  * Add default password value
+	 */
+	 
+	 $form['account']['#type'] = 'fieldset';
+	 $form['account']['#collapsible']=true;
+	 $form['account']['#collapsed'] = true;
+	 $form['account']['#weight'] = 100000;
+	 $form['account']['#title'] = 'Account Information';
+	 $form['account']['#prefix'] = '<div id="account-information">'; 
+	 $form['account']['#suffix'] = '</div>';
+	 
+	$form['temp_email'] = $form['account']['mail'];
+	$form['temp_email']['#ajax'] = array(
+		'event' => 'blur',
+		'callback' => 'fc_user_ajax_update_account_info_callback',
+      	'wrapper' => 'account-information',
+		'method' => 'replace',
+		'effect' => 'fade',
+	); 
+	
+	 // Make the vendor type filed visible only if the account_type is vendor
+	 $form['field_vendor_type']['#states']= array(
+	 	'visible' => array(
+			':input[name="field_account_type[und][2]"]' => array('checked' => TRUE)),
+	 );
+	 
+	 if ($form_id=='user_register_form'){
+		 $form['#submit'][]='fc_users_user_register_redirection';
+	 }
+	 
+	}
+	if ($form_id =='event_node_form'){
+		if(isset($_GET['customer_id'])){
+			//$form['field_billing_customer']
+			
+		}
+	
+	}
+	/* Customer Search Customization */
+	if ($form['#id'] =='views-exposed-form-customer-list-page'){
+	
+			$form['#action'] = 'customer-list';
+	
+	}
+}
+function fc_user_ajax_update_account_info_callback ($form, $form_state) {
+  // The form has already been submitted and updated. We can return the replaced
+  // item as it is.
+  $random_pass = fc_users_generate_password(9,8);
+  
+  $form['account']['name']['#value']= $form_state['values']['temp_email'];
+  $form['account']['mail']['#value']= $form_state['values']['temp_email'];
+  $form['account']['pass']['#value'] = $random_pass;
+  
+  
+  return $form['account'];
+}
+
+function fc_users_generate_password($length=9, $strength=0) {
+	$vowels = 'aeuy';
+	$consonants = 'bdghjmnpqrstvz';
+	if ($strength & 1) {
+		$consonants .= 'BDGHJLMNPQRSTVWXZ';
+	}
+	if ($strength & 2) {
+		$vowels .= "AEUY";
+	}
+	if ($strength & 4) {
+		$consonants .= '23456789';
+	}
+	if ($strength & 8) {
+		$consonants .= '@#$%';
+	}
+ 
+	$password = '';
+	$alt = time() % 2;
+	for ($i = 0; $i < $length; $i++) {
+		if ($alt == 1) {
+			$password .= $consonants[(rand() % strlen($consonants))];
+			$alt = 0;
+		} else {
+			$password .= $vowels[(rand() % strlen($vowels))];
+			$alt = 1;
+		}
+	}
+	return $password;
+}
+ /* 
+ * Extra Submit function to handle user registration redirection back to the user profile page 
+ */
+function fc_users_user_register_redirection ($form,&$form_state){
+	//drupal_set_message('UID: '.$form_state['values']['uid']);
+	
+	$form_state['redirect'] = 'user/'.$form_state['values']['uid'];
+	
+}
+
+?>

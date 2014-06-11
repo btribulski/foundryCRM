@@ -1,0 +1,317 @@
+<?php
+/*
+ * file: Handles the location costs associated with the rooms for
+ * Location: Room pulled from Locations taxonomy
+ * Season: Peak(p) - Regular(r) - Offseason(o)
+ * Day: either weekday or weekend
+ * Rate: cost associated with the above criteria
+*/
+
+//Set the VID for the Cost Seasons and Cost - Days vocabulary ids 
+define('COST_LOCATIONS_VID',7);
+define('COST_SEASONS_VID',9);
+define('COST_DAYS_VID',8);
+
+
+/**
+ * Implements hook_permission().
+ */
+function fc_location_costs_permission() {
+  $perms = array(
+    'manage location default costs' => array(
+      'title' => t('Manage Default Room Costs'),
+    ),
+  );
+
+  return $perms;
+}
+
+/**
+ * Implements hook_menu().
+ */
+function fc_location_costs_menu() {
+
+	$items['admin/config/fc-location-costs'] = array(
+		'title' => t('Enter Default Room Costs'),
+		'description' => t('Enter the default room rates when an event takes place. (Season and Day of Week)'),
+		'page callback' => 'drupal_get_form',
+		'page arguments' => array('fc_location_costs_defaultsform'),
+		'access callback' => 'user_access',
+		'access arguments' => array('manage location default costs'),
+		'weight' => 9,
+    );
+  return $items;
+}
+
+function fc_location_costs_page(){
+	$output = '<p>This is where we will be setting the default costs of the rooms</p>';
+	$output .= drupal_get_form('fc_location_costs_defaultsform');
+	return $output;
+}
+
+
+function fc_location_costs_defaultsform(){
+	$locations_terms = taxonomy_get_tree(COST_LOCATIONS_VID);
+	$seasons_terms = taxonomy_get_tree(COST_SEASONS_VID);
+	$days_terms = taxonomy_get_tree(COST_DAYS_VID);		
+	$existing_values = fc_location_costs_get_existing_values();
+	
+	foreach ($locations_terms as $location){
+		$fieldset_name = $location->name . '_fieldset';
+		$form[$fieldset_name] = array(
+			'#title' => $location->name,
+			'#type' => 'fieldset',
+			'#collapsible' =>TRUE,
+			'#collapsed' => TRUE,
+		
+		);
+		
+		foreach($seasons_terms as $season) {
+			foreach ($days_terms as $day){
+				//fix for undefined indexes of non-existant values
+				$default_cost = isset($existing_values[$location->tid][$season->tid][$day->tid]['cost'])?$existing_values[$location->tid][$season->tid][$day->tid]['cost']:'';
+				$default_elcid = isset($existing_values[$location->tid][$season->tid][$day->tid]['elcid'])?$existing_values[$location->tid][$season->tid][$day->tid]['elcid']:0;
+				$form[$fieldset_name][$location->tid][$season->tid][$day->tid]['cost'] = array(
+					//'#title' =>  $location->name . ' - ' .$season->name . ' - ' . $day->name . ' Rate',
+					'#title' =>  $season->name . ' - ' . $day->name . ' Rate',
+					'#type' => 'textfield',
+					//'#default_value' => $existing_values[$location->tid][$season->tid][$day->tid]['cost'],
+					'#default_value' => $default_cost,
+					'#size' => 20,
+					'#parents' => array($location->tid, $season->tid, $day->tid,'cost'),
+				);
+				$form[$fieldset_name][$location->tid][$season->tid][$day->tid]['elcid'] = array(
+					'#type' => 'hidden',
+					//'#value' => $existing_values[$location->tid][$season->tid][$day->tid]['elcid'],
+					'#value' => $default_elcid,
+					'#parents' => array($location->tid, $season->tid, $day->tid,'elcid'),
+				);
+			
+			}
+		
+		}
+	
+	}
+	$form['submit'] = array(
+		'#type'=>'submit',
+		'#value'=>t('Save'),
+	);
+	
+	return $form;
+}
+function fc_location_costs_defaultsform_validate($form, &$form_state){
+	$locations_terms = taxonomy_get_tree(COST_LOCATIONS_VID);
+	foreach ($locations_terms as $location){
+		foreach($form_state['values'][$location->tid] as $season_tid=>$season){
+			foreach ($season as $day_tid=>$day){
+				//check to make sure that the fields have decimals	
+				$this_form_element = $location->tid.'['.$season_tid.']['.$day_tid.'][\'cost\']';
+				if(strpos($day['cost'],'.')===false){
+					$day_term = taxonomy_term_load($day_tid);
+					$season_term = taxonomy_term_load($season_tid); 
+					$err_msg = 'Please use a currency format (1000.00) for '. $location->name .' - '. $season_term->name .' - ' . $day_term->name;
+					form_set_error($this_form_element,t($err_msg));
+				}
+				
+			}
+		}
+	}
+	
+}
+function fc_location_costs_defaultsform_submit($form, &$form_state){
+	$locations_terms = taxonomy_get_tree(COST_LOCATIONS_VID);
+	foreach ($locations_terms as $location){
+		foreach($form_state['values'][$location->tid] as $season_tid=>$season){
+			foreach ($season as $day_tid=>$day){
+				//drupal_set_message( t('Location ID: %lid : Season:  %sid : Day %did : Cost %cost ',array( '%lid' => $location->tid, '%sid' => $season_tid, '%did'=>$day_tid, '%cost'=>$day['cost']))); 
+				$table = 'event_location_costs';
+				$record = new stdClass();
+				$record->location = $location->tid;
+				$record->season = $season_tid;
+				$record->day = $day_tid;
+				$record->cost = $day['cost'];
+				$record->elcid = $day['elcid'];
+				
+				if(strlen($day['cost'])){
+					if ($day['elcid']){	
+						drupal_write_record($table,$record,'elcid');
+					}else{
+						drupal_write_record($table,$record);
+					}
+					
+				}
+			}
+		}
+	}
+	
+}
+
+
+function fc_location_costs_get_existing_values(){
+	$cost=array();
+	$query = db_select('event_location_costs','elc');
+	$query->fields('elc',array('elcid','location','season','day','cost'));
+	$result = $query->execute();
+	if ($result){
+		foreach($result as $row){
+			$cost[$row->location][$row->season][$row->day]['elcid'] = $row->elcid;
+			$cost[$row->location][$row->season][$row->day]['cost'] = $row->cost;
+		}
+	}
+	return $cost;
+}
+/**
+ * Implements hook_form_alter().
+ */
+function fc_location_costs_form_alter(&$form, &$form_state, $form_id){
+	
+	if ($form_id =='event_node_form'){
+		$node = $form_state['node'];
+		$form['field_location']['und']['#ajax']= array(
+			  'event'=> 'change',
+			  'callback' => 'fc_location_costs_update_financials_js',
+			  //'wrapper' => 'node_event_form_group_financials',
+			  'wrapper' => 'event-node-form',
+			  'method' => 'replace',
+			  'effect' => 'fade',
+		);
+		
+		$form['field_contract_price']['und'][0]['value']['#ajax'] = array(
+			'event'=> 'change',
+			'callback' => 'fc_location_costs_update_balance_due_js',
+			//'wrapper' => 'field-balance-due-add-more-wrapper',
+			//'wrapper' => 'node_event_form_group_financials',
+			'method' => 'replace',
+			'effect' => 'fade',
+		);
+		$form['field_deposits_received']['und'][0]['value']['#ajax'] = array(
+			'event'=> 'change',
+			'callback' => 'fc_location_costs_update_balance_due_js',
+			//'wrapper' => 'field-balance-due-add-more-wrapper',
+			'method' => 'replace',
+			'effect' => 'fade',
+		);
+		
+		$form['field_contract_price']['und'][0]['value']['#prefix'] = '<div id="field-contract-price-ajax-wrapper">';
+		$form['field_contract_price']['und'][0]['value']['#suffix'] = '</div>';
+		$form['field_balance_due']['und'][0]['value']['#prefix'] = '<div id="field-balance-due-ajax-wrapper">';
+		$form['field_balance_due']['und'][0]['value']['#suffix'] = '</div>';
+		/*
+		//just a little button to help with debugging 
+		$form['view_formstate'] = array(
+			'#type'=>'submit',
+			'#value' => 'Debug button line 230 fc_location_costs.module (view form_state)',
+			'#submit' => array('fc_location_viewformstate'),
+		);
+		*/
+		
+	}
+}
+function fc_location_costs_update_financials_js(&$form, &$form_state) {
+	$total_cost = fc_location_costs_get_total_cost($form_state);
+	$form['field_contract_price']['und'][0]['value']['#value'] = $total_cost;
+	$form_state['values']['field_contract_price']['und'][0]['value'] = $total_cost;
+	//$deposits_received = $form_state['input']['field_deposits_received']['und'][0]['value'];
+	$total_received= fc_event_payment_total_received($form_state);
+	$non_contract = fc_event_payment_non_contract_payments($form_state);
+	$form['field_balance_due']['und'][0]['value']['#value'] = $total_cost - $total_received + $non_contract;
+	
+	//return $form['financial_data'];
+	return $form;
+}
+function fc_location_costs_update_balance_due_js(&$form, &$form_state) {
+	$total_cost = $form_state['values']['field_contract_price']['und'][0]['value'];
+	//$deposits_received = $form_state['values']['field_deposits_received']['und'][0]['value'];
+	$total_received=fc_event_payment_total_received($form_state);
+	$non_contract = fc_event_payment_non_contract_payments($form_state);
+	$form['field_balance_due']['und'][0]['value']['#value'] = $total_cost - $total_received + $non_contract;
+	$form_state['values']['field_balance_due']['und'][0]['value'] = $total_cost - $total_received;
+	
+	//return $form['field_balance_due']['und'][0]['value'];
+	return array(
+    '#type' => 'ajax',
+    '#commands' => array(
+      //ajax_command_replace("#field-contract-price-add-more-wrapper", render($form['field_contract_price']['und'][0]['value'])),
+	  //ajax_command_replace("#field-deposits-received-add-more-wrapper", render($form['field_deposits_received']['und'][0]['value'])),
+	  //ajax_command_replace("#field-balance-due-add-more-wrapper", render($form['field_balance_due']['und'][0]['value'])),
+	  ajax_command_replace("#field-balance-due-ajax-wrapper", render($form['field_balance_due']['und'][0]['value'])),
+    ),
+  );
+
+}
+
+function fc_location_costs_get_total_cost($form_state){
+	$total_cost = 0;
+	$event_date = $form_state['input']['field_event_date']['und'][0]['value']['date'];
+	//foreach ($form_state['input']['field_location']['und'] as $key=>$value){ drupal_set_message('Line 191: KEY:'.$key.' VALUE:' .$value);}
+	foreach ($form_state['input']['field_location']['und'] as $key => $selected_room_tid){
+		if ($selected_room_tid){
+			$room_cost = fc_location_costs_get_rate($selected_room_tid,$event_date);
+			$total_cost +=  $room_cost;
+		}
+	}
+	return $total_cost;
+}
+
+
+/*
+ * todo: This needs an admin form to do the mapping
+ */
+ 
+function fc_location_costs_get_rate($room, $event_date){
+	//foreach ($event_date as $key=>$value){ drupal_set_message('Line 201: KEY:'.$key.' VALUE:' .$value);}
+	//drupal_set_message('Line 202: Event Date: '. $event_date);
+	$day_of_week = date("l",strtotime($event_date));
+	$month = date("M",strtotime($event_date));	
+	
+	switch (strtolower($day_of_week)) {
+		case 'saturday':
+			$day_tid = 39;
+			break;
+		case 'friday':
+		// case 'sunday':
+		// removed 2013-02-14 urbanc
+			$day_tid = 35;
+			break;
+		default:
+			$day_tid = 34;		
+	}
+	switch (strtolower($month)) {
+		case 'jan':
+		case 'feb':
+		case 'mar':
+			$season_tid = 38; // off season
+			break;
+		case 'apr':
+		case 'jul':
+		case 'aug':
+		case 'nov':
+		case 'dec': 
+			$season_tid = 37; // regular season
+			break;
+		case 'may':
+		case 'jun':
+		case 'sep':
+		case 'oct':
+			$season_tid = 36; //peak season
+			break;	
+	}
+	$query = db_select('event_location_costs','elc');
+	$query->condition('location',$room);
+	$query->condition('season',$season_tid);
+	$query->condition('day',$day_tid);
+	$query->fields('elc',array('cost'));
+	
+	$result  = $query->execute();
+	foreach($result as $row){
+		$cost = $row->cost;
+	}
+	return $cost;
+}
+function fc_location_viewformstate($form,$form_state){
+	$event_date = $form_state['values']['field_event_date']['und'][0]['value'];
+	$timestamp = strtotime($event_date);
+	print_r($form['#groups']);
+	exit();
+	drupal_set_message('Event Date:' . $event_date);
+}

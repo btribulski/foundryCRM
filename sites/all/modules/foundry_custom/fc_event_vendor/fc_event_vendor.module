@@ -1,0 +1,550 @@
+<?php
+
+/**
+ * @file
+ * Enables the ability to add multiple vendors to an event
+ */
+
+/** Here is a nice little debug cut and paste
+	foreach ($variables as $key=>$value) {
+		drupal_set_message('Line xxx: Key: '.$key.' Value: '.$value);
+	}
+*/
+function fc_event_vendor_init() {
+	//drupal_add_js(drupal_get_path('module','fc_event_vendor').'/js/jquery.popupWindow.js');
+	//drupal_add_js(drupal_get_path('module','fc_event_vendor').'/js/popup.js');
+}
+/**
+ * Implements hook_permission().
+ */
+function fc_event_vendor_permission() {
+  $perms = array(
+    'manage event vendors' => array(
+      'title' => t('Manage Event Vendors'),
+    ),
+  );
+
+  return $perms;
+}
+/**
+ * Implements hook_menu().
+ */
+function fc_event_vendor_menu() {
+
+	/*
+	$items['admin/config/foundry-custom/event-vendor'] = array(
+		'title' => 'Event Vendor Configuration',
+		'page callback' => 'poll_page',
+		'access arguments' => array('manage event vendors'),
+		'type' => MENU_NORMAL_ITEM,
+		//'file' => 'admin.pages.inc',
+  	);
+	*/
+	$items['fc-event-vendor/company-autocomplete'] = array(
+		'page callback' => 'fc_event_vendor_company_autocomplete',
+		'access arguments' => array('manage event vendors'),
+		'type' => MENU_CALLBACK
+	);
+  return $items;
+}
+/**
+ * Implements hook_theme().
+ */
+
+function fc_event_vendor_theme($existing, $type, $theme, $path) {
+  $theme_hooks = array(
+    'event_vendor_entry_table' => array(
+  	  'render element' => 'form',
+      'file' => 'theme.inc',
+      'path' => $path . '/theme',
+    ),
+  );
+  return $theme_hooks;
+}
+function fc_event_vendor_views_api(){
+ return array(
+ 	'api'=>'3.0',
+	'path' => drupal_get_path('module', 'fc_event_vendor') .'/views',
+	//'file'=> 'fc_event_vendor.views.inc',
+	);
+}
+
+
+/**
+ * Implements hook_field_extra_fields().
+ */
+function fc_event_vendor_field_extra_fields() {
+  $extra['node']['event'] = array(
+    'form' => array(
+      'vendors_wrapper' => array(
+        'label' => t('Event Vendors'),
+        'description' => t('Vendors for this event'),
+        'weight' => -4,
+      ),
+    ),
+    /*
+	'display' => array(
+      'poll_view_voting' => array(
+        'label' => t('Poll vote'),
+        'description' => t('Poll vote'),
+        'weight' => 0,
+      ),
+    )
+	*/
+  );
+
+  return $extra;
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function fc_event_vendor_form_alter(&$form, &$form_state, $form_id){
+	
+	if ($form_id =='event_node_form'){
+	$node = $form_state['node'];
+	
+	$form_state['cache'] = TRUE;
+	 if (isset($form_state['vendors_count'])) {
+		$vendors_count = $form_state['vendors_count'];
+	  }
+	  else {
+		$vendors_count = max(2, empty($node->vendor) ? 2 : count($node->vendor));
+	  }
+	  
+	  // Add a wrapper for the vendors and more button.
+	  $form['vendors_wrapper'] = array(
+		'#tree' => FALSE,
+		'#type' => 'fieldset',
+		'#collapsible' =>false,
+		'#weight' => -4,
+		'#prefix' => '<div id="vendors-wrapper">',
+		'#suffix' => '</div>',
+	  );
+	
+	  // Container for just the individual vendor selection.
+	  $form['vendors_wrapper']['vendor'] = array(
+		'#prefix' => '<div id="vendor-selection">',
+		'#suffix' => '</div>',
+		'#theme' => 'event_vendor_entry_table',
+	  );
+	  
+	// Add the current selections to the form.
+	  $delta = 0;
+	  $weight = 0;
+	  //foreach ($node->vendors as $key=>$value) {
+		if (isset($node->vendors)) {
+			//$delta = count($node->vendors);
+			foreach ($node->vendors as $veid => $vendor) {
+			  //$key = 'veid:' . $veid;
+			  //$form['vendors_wrapper']['vendor'][$key] = _vendor_selection_form($key, $vendor['veid'], $vendor['uid'], $vendor['type'], $vendor['current_status'], $vendor['weight'], $vendors_count);
+			  $form['vendors_wrapper']['vendor'][$delta] = _vendor_selection_form($delta, $vendor['veid'], $vendor['uid'], $vendor['type'], $vendor['current_status'], $vendor['weight'], $vendors_count);
+			  $weight = max($vendor['weight'], $weight);
+			  $delta++;
+			}
+	  	}
+	  //}
+	  // Add initial or additional choices.
+	  $existing_delta = $delta;
+	  for ($delta; $delta < $vendors_count; $delta++) {
+		//$key = 'new:' . ($delta - $existing_delta);
+		//$key = 'new:' . ($delta);
+		// Increase the weight of each new choice.
+		$weight++;
+		//$form['vendors_wrapper']['vendor'][$key] = _vendor_selection_form($key, NULL, NULL, '', '', $weight, $vendors_count);
+		$form['vendors_wrapper']['vendor'][$delta] = _vendor_selection_form($delta, NULL, NULL, '', '', $weight, $vendors_count);
+	  }
+	
+	  // We name our button 'poll_more' to avoid conflicts with other modules using
+	  // Ajax-enabled buttons with the id 'more'.
+	  $form['vendors_wrapper']['vendors_more'] = array(
+		'#type' => 'submit',
+		'#value' => t('More Vendors'),
+		'#attributes' => array(
+		  'title' => t("If the amount of boxes above isn't enough, click here to add more vendors."),
+		),
+		'#weight' => 1,
+		'#limit_validation_errors' => array(array('vendor')),
+		'#submit' => array('fc_event_vendor_more_vendors_submit'),
+		'#ajax' => array(
+		  'callback' => 'fc_event_vendor_selection_js',
+		  'wrapper' => 'vendor-selection',
+		  'method' => 'replace',
+		  'effect' => 'fade',
+		),
+	  );
+	
+	}
+}
+/**
+ * Submit handler to add more choices to a poll form.
+ *
+ * This handler is run regardless of whether JS is enabled or not. It makes
+ * changes to the form state. If the button was clicked with JS disabled, then
+ * the page is reloaded with the complete rebuilt form. If the button was
+ * clicked with JS enabled, then ajax_form_callback() calls poll_choice_js() to
+ * return just the changed part of the form.
+ */
+function fc_event_vendor_more_vendors_submit($form, &$form_state) {
+  // If this is a Ajax POST, add 1, otherwise add 5 more choices to the form.
+  if ($form_state['values']['vendors_more']) {
+    $n = $_GET['q'] == 'system/ajax' ? 1 : 5;
+    $form_state['vendors_count'] = count($form_state['values']['vendor']) + $n;
+  }
+  // Renumber the choices. This invalidates the corresponding key/value
+  // associations in $form_state['input'], so clear that out. This requires
+  // poll_form() to rebuild the choices with the values in
+  // $form_state['node']->choice, which it does.
+  $form_state['node']->vendors = array_values($form_state['values']['vendor']);
+  //unset($form_state['input']['vendor']);
+  $form_state['rebuild'] = TRUE;
+}
+function _vendor_selection_form($key, $veid = NULL, $uid=NULL, $type = '', $current_status = '', $weight = 0, $size = 10) {
+  $form = array(
+    '#tree' => TRUE,
+    '#weight' => $weight,
+  );
+
+  // We'll manually set the #parents property of these fields so that
+  // their values appear in the $form_state['values']['choice'] array.
+  $form['form_start'] = array(
+  	'#type' => 'markup',
+	'#value' => '<div id="vendor-subform-'.$key.'">',
+	);
+  
+  $form['veid'] = array(
+    '#type' => 'value',
+    '#value' => $veid,
+    '#parents' => array('vendor', $key, 'veid'),
+  );
+
+  
+  
+  $company_name = fc_event_vendor_get_company_name($uid);
+  $destination = $_GET['q'];
+  $form['uid'] = array(
+    '#type' => 'select',
+    '#title_display' => 'invisible',
+    '#default_value' => $uid,
+    '#options' => fc_event_vendor_select_options(),
+	'#parents' => array('vendor', $key, 'uid'),
+	'#ajax' => array(
+		  'event'=> 'change',
+		  'callback' => 'fc_event_vendor_update_company_type_js',
+		  //'wrapper' => 'vendor-subform-'.$key,
+		  'wrapper' => 'vendor-selection',
+		  'method' => 'replace',
+		  'effect' => 'fade',
+		),
+  );
+  
+  /*
+  $form['company_name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Vendor'),
+    //'#title_display' => 'invisible',
+    '#default_value' => $company_name,
+    '#parents' => array('vendor', $key, 'company_name'),
+	'#autocomplete_path' => 'fc-event-vendor/company-autocomplete',
+	'#ajax' => array(
+		  'event'=> 'change',
+		  'callback' => 'fc_event_vendor_update_by_company_js',
+		  //'wrapper' => 'vendor-subform-'.$key,
+		  'wrapper' => 'vendor-selection',
+		  'method' => 'replace',
+		  'effect' => 'fade',
+		),
+	
+	//'#suffix' => '<a class="event-vendor-popup" href="/admin/people/create?cust-type=vendor">Add Vendor</a>',
+	'#suffix' => '<a onclick="window.open(\'/admin/people/create?cust-type=vendor\',\'VendorADD\',\'width=800,height=500,scrollbars=1,top=50,left=100\');" href="#">Add Vendor</a>',
+  );
+  */
+
+  $form['type'] = array(
+    '#type' => 'select',
+    '#title' => t('Type of Vendor'),
+    '#title_display' => 'invisible',
+    '#default_value' => $type,
+    '#options' => fc_event_vendor_taxonomy_select_options(4), // vendor_type = 4
+	'#multiple'=> false,
+	//'#size' => 1,
+    '#parents' => array('vendor', $key, 'type'),
+  );
+  $current_status_checked = ($current_status==1)?array('checked'=>'checked'):array();
+  $form['current_status'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('COI Received'),
+    '#title_display' => 'invisible',
+    '#attributes' => $current_status_checked,
+	'#return_value' => 1,
+	'#default_value'=> $current_status,
+    '#parents' => array('vendor', $key, 'current_status'),
+  );
+  
+  $form['weight'] = array(
+    '#type' => 'hidden',
+    '#default_value' => $weight,
+    '#delta' => $size,
+    '#parents' => array('vendor', $key, 'weight'),
+  );
+  $form['form_end'] = array(
+  	'#type' => 'markup',
+	'#value' => '</div>',
+	);
+  return $form;
+}
+/**
+ * Ajax callback in response to new vendors being added to the form.
+ *
+ * This returns the new page content to replace the page content made obsolete
+ * by the form submission.
+ *
+ * @see fc_event_vendor_more_vendors_submit()
+ */
+function fc_event_vendor_selection_js($form, $form_state) {
+  return $form['vendors_wrapper']['vendor'];
+}
+/**
+ * Ajax callback in response to company name being selected.
+ *
+ * This returns the new page content to replace the page content made obsolete
+ * by the form submission.
+ *
+ * @see fc_event_vendor_more_vendors_submit()
+ */
+function fc_event_vendor_update_by_company_js($form, &$form_state) {
+	 
+	 foreach ($form_state['values']['vendor'] as $key=>$vendor){
+	 	//get the numeric Id from company_name
+		if(is_numeric($vendor['company_name'])|| strlen($vendor['company_name'])==0 ){ // company name is holding a uid
+			//set the hidden uid value to be that number
+			$form['vendors_wrapper']['vendor'][$key]['uid']['#value'] =$vendor['company_name']; //use the found uid and place it in the hidden uid field
+			$form['vendors_wrapper']['vendor'][$key]['company_name']['#value'] =fc_event_vendor_get_company_name($vendor['company_name']); //maintain the company name for clarity
+			$form['vendors_wrapper']['vendor'][$key]['type']['#value'] =fc_event_vendor_get_vendor_type($vendor['company_name']); //maintain the company name for clarity
+			$form_state['values']['vendor'][$key]['company_name'] =fc_event_vendor_get_company_name($vendor['company_name']);
+		}
+	 }
+	 return $form['vendors_wrapper']['vendor'];
+}
+function fc_event_vendor_update_company_type_js($form, &$form_state) {
+	foreach ($form_state['values']['vendor'] as $key=>$vendor){
+		if(is_numeric($vendor['uid'])|| strlen($vendor['uid'])==0 ){
+			$form['vendors_wrapper']['vendor'][$key]['type']['#value'] =fc_event_vendor_get_vendor_type($vendor['uid']); //maintain the company name for clarity
+		}
+	}
+	return $form['vendors_wrapper']['vendor'];
+}
+
+/**
+ * Form submit handler for node_form().
+ *
+ * Upon preview and final submission, we need to renumber poll choices and
+ * create a teaser output.
+ */
+function fc_event_vendor_node_form_submit(&$form, &$form_state) {
+  // Renumber choices.
+  $form_state['values']['vendor'] = array_values($form_state['values']['vendor']);
+  $form_state['values']['teaser'] = fc_event_vendor_teaser((object) $form_state['values']);
+}
+
+/**
+ * Implements hook_load().
+ */
+function fc_event_vendor_node_load($nodes,$types) {
+	global $user;
+	foreach ($nodes as $node) {
+  		// Load the appropriate vendors.
+		$vendors = db_select('event_vendor', 'ev')
+		  ->addTag('translatable')
+		  ->fields('ev', array('veid', 'uid', 'type', 'current_status','weight'))
+		  ->condition('ev.nid', $node->nid)
+		  ->orderBy('weight')
+		  ->execute()->fetchAllAssoc('veid', PDO::FETCH_ASSOC);
+	  
+		}
+		
+		
+	$nodes[$node->nid]->vendors = $vendors;	
+}
+/**
+ * Implements hook_insert().
+ */
+function fc_event_vendor_node_insert($node) {
+ if(isset($node->vendors)){
+  foreach ($node->vendors as $vendor) {
+    if ($vendor['uid'] != '') {
+      db_insert('event_vendor')
+        ->fields(array(
+          'nid' => $node->nid,
+          'uid' => $vendor['uid'],
+          'type' => $vendor['type'],
+		  'current_status' => $vendor['current_status'],
+          'weight' => $vendor['weight'],
+        ))
+        ->execute();
+    }
+  }
+ }
+}
+/**
+ * Implements hook_update().
+ */
+function fc_event_vendor_node_update($node) {
+  
+  // Poll choices with empty titles signifies removal. We remove all votes to
+  // the removed options, so people who voted on them can vote again.
+  if(isset($node->vendor)){  
+	  foreach ($node->vendor as $key => $vendor) {
+		if (!empty($vendor['uid'])) {
+		 if (!empty($vendor['veid'])){
+			  $DBWriteStatus = db_merge('event_vendor')
+				->key(array('veid' => $vendor['veid']))
+				->fields(array(
+				  //'nid' => $node->nid,
+				  'uid' => $vendor['uid'],
+				  'type' => $vendor['type'],
+				  'current_status' => $vendor['current_status'],
+				  'weight' => $vendor['weight'],
+				))
+				->execute();
+		  }
+		  else {
+			  db_insert('event_vendor')
+			->fields(array(
+			  'nid' => $node->nid,
+			  'uid' => $vendor['uid'],
+			  'type' => $vendor['type'],
+			  'current_status' => $vendor['current_status'],
+			  'weight' => $vendor['weight'],
+			))
+			->execute();
+		  }
+		}
+		else {
+		  if($vendor['veid']){
+			  db_delete('event_vendor')
+				->condition('nid', $node->nid)
+				->condition('veid', $vendor['veid'])
+				->execute();
+			  drupal_set_message ("We just deleted");
+			  drupal_set_message('nid: ' . $node->nid);
+			  drupal_set_message('uid: ' . $vendor['uid']);
+			  drupal_set_message('type: ' . $vendor['type']);
+			  drupal_set_message('current status: ' . $vendor['current_status']);
+			  drupal_set_message('weight: ' . $vendor['weight']);
+			  drupal_set_message('++++++++++++++++++++');
+		  }
+		}
+	  }
+  }
+}
+
+/**
+ * Implements hook_delete().
+ */
+function fc_event_vendor_node_delete($node) {
+  db_delete('event_vendor')
+    ->condition('nid', $node->nid)
+    ->execute();
+ 
+}
+/**
+ * Creates a simple teaser that lists all the choices.
+ *
+ * This is primarily used for RSS.
+ */
+function fc_event_vendor_teaser($node) {
+  $teaser = NULL;
+  if (is_array($node->vendors)) {
+    foreach ($node->vendors as $k => $vendor) {
+      if ($vendor['uid'] != '') {
+        $teaser .= '* ' . check_plain($vendor['chtext']) . "\n";
+      }
+    }
+  }
+  return $teaser;
+}
+
+/**
+ * Autocomlete Function for Vendor Company Name
+ */
+ 
+ function fc_event_vendor_company_autocomplete($string) {
+ 
+   $matches = array();
+ $query = db_select('field_data_field_company', 'c');
+  $query->join('field_data_field_account_type','acct','c.entity_id=acct.entity_id');
+  // Select rows that match the string
+  $return = $query
+ 	->fields('c', array('entity_id','field_company_value'))
+	->condition('c.field_company_value', '%' . db_like($string) . '%', 'LIKE')
+	->condition('acct.field_account_type_tid', 2)
+    ->range(0, 10)
+    ->execute();
+ 
+  // add matches to $matches 
+  foreach ($return as $row) {
+    $matches[$row->entity_id] = check_plain($row->field_company_value);
+  }
+  // return for JS
+  drupal_json_output($matches);
+ }
+function fc_event_vendor_select_options(){
+    $matches = &drupal_static(__FUNCTION__);
+    if(!isset($matches)){
+        if ($cache = cache_get('fc_event_vendor_select_options_data')) {
+            $matches = $cache->data;
+        }
+        else {
+
+            $matches[0]='-- Select --';
+            $query = db_select('field_data_field_company', 'c');
+            $query->join('field_data_field_account_type','acct','c.entity_id=acct.entity_id');
+            // Select rows that match the string
+            $return = $query
+                ->fields('c', array('entity_id','field_company_value'))
+                ->condition('acct.field_account_type_tid', 2)
+                ->orderBy('c.field_company_value','ASC')
+                //->range(0, 10)
+                ->execute();
+
+            // add matches to $matches
+            foreach ($return as $row) {
+                $matches[$row->entity_id] = check_plain($row->field_company_value);
+            }
+            cache_set('fc_event_vendor_select_options_data', $matches, 'cache');
+        }
+    }
+    return $matches;
+}
+ function fc_event_vendor_get_company_name($uid){
+	$query = db_select('field_data_field_company', 'c');
+
+  // Select rows that match the string
+  $result = $query
+    ->fields('c', array('field_company_value'))
+    ->condition('c.entity_id', $uid)
+	->execute();
+  	foreach ($result as $row) {
+		return $row->field_company_value;
+	}
+ }
+ function fc_event_vendor_get_vendor_type($uid){
+ 	$query = db_select('field_data_field_vendor_type', 'v');
+
+  // Select rows that match the string
+  $result = $query
+    ->fields('v', array('field_vendor_type_tid'))
+    ->condition('v.entity_id', $uid)
+	->execute();
+  	foreach ($result as $row) {
+		return $row->field_vendor_type_tid;
+	}
+ }
+function fc_event_vendor_taxonomy_select_options($vid) {
+	$terms = taxonomy_get_tree($vid);
+	$select_option_values = array();
+	foreach ($terms as $term) {	
+	$select_option_values[$term->tid] = $term->name;	}
+	return $select_option_values;
+}

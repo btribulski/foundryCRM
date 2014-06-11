@@ -1,0 +1,12 @@
+name = Event Vendor Selection
+description = Provides custom functionality to select vendors for an event
+core = 7.x
+package = FoundryCustom
+configure = admin/config/foundry-custom/event-vendor
+
+; Information added by drupal.org packaging script on 2012-08-31
+version = "7.x-1.0
+core = "7.x"
+project = "foundrycustom"
+datestamp = "1329090638"
+

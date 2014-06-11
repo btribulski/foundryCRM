@@ -1,0 +1,79 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for the node module.
+ */
+function fc_event_vendor_install() {
+  
+}
+function fc_event_vendor_uninstall() {
+  
+}
+
+
+/**
+ * Implements hook_schema().
+ */
+function fc_event_vendor_schema() {
+  $schema['event_vendor'] = array(
+    'description' => 'Stores the vendors for events',
+    'fields' => array(
+      'veid' => array(
+        'description' => 'The primary identifier for a node.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      // Defaults to NULL in order to avoid a brief period of potential
+      // deadlocks on the index.
+      'nid' => array(
+        'description' => 'The nid of the event',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'default' => NULL,
+      ),
+	  'uid' => array(
+        'description' => 'The uid of the vendor',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'default' => NULL,
+      ),
+      'type' => array(
+        'description' => 'The type of vendor for the event ',
+        'type' => 'varchar',
+        'length' => 100,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'current_status' => array(
+        'description' => 'The current status of this vendor',
+        'type' => 'varchar',
+        'length' => 100,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+	  'weight' => array(
+        'description' => 'Controls the order of the vendors',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'default' => NULL,
+      ),
+    ),
+    'unique keys' => array(
+      'veid' => array('veid'),
+    ),
+    'foreign keys' => array(
+      'uid' => array(
+        'table' => 'users',
+        'columns' => array('uid' => 'uid'),
+      ),
+    ),
+    'primary key' => array('veid'),
+  );
+  
+  return $schema;
+}

@@ -1,0 +1,156 @@
+<?php
+// $Id$
+
+/**
+ * Implementation of hook_install()
+ */
+function channel_install() {
+  node_types_rebuild();
+  $types = node_type_get_types();
+  node_add_body_field($types['channel']);
+  $body_instance = field_info_instance('node', 'body', 'channel');
+  $body_instance['type'] = 'text_summary_or_trimmed';
+  field_update_instance($body_instance);
+}
+
+/**
+ * Implementation of hook_uninstall()
+ */
+function channel_uninstall() {
+  $result = db_query('SELECT nid FROM {node} n WHERE n.type = :type', array(':type' => 'channel'));
+  $nids = array();
+  foreach($result as $row){
+    $nids[] = $row->nid;
+  }
+  node_delete_multiple($nids);
+}
+
+/**
+ * Implementation of hook_schema()
+ */
+function channel_schema() {
+  $schema['channel'] = array(
+    'description' => t('Stores data for nodes of type channel'),
+    'fields' => array(
+      'nid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "The channel's node id",
+      ),
+      'vid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "The channel's revision id",
+      ),
+      'filter' => array(
+        'type' => 'text',
+        'not null' => TRUE,
+        'description' => "The channel's filter data - as a serialized PHP array",
+      ),
+      'page_limit' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "The amount of items to show in a page before paging occurs.",
+      ),
+      'block_limit' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "The amount of items to show in a block before paging occurs",
+      ),
+      'theme_page_use_default' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 1,
+        'description' => "Whether or not to use the default theme system to render the node",
+      ),
+      'theme_page_collection' => array(
+        'type' => 'text',
+        'description' => "PHP that defines the way the collection as a whole appears in page view",
+      ),
+      'theme_page_collection_use_file' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "Whether or not to use a theme file to render the collection page view",
+      ),
+      'theme_page_item' => array(
+        'type' => 'text',
+        'description' => "PHP that defines the way an item in the collection appears in page view",
+      ),
+      'theme_page_item_use_file' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "Whether or not to use a theme file to render the item page view",
+      ),
+      'theme_block_collection' => array(
+        'type' => 'text',
+        'description' => "PHP that defines the way the collection as a whole appears in block view",
+      ),
+      'theme_block_collection_use_file' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "Whether or not to use a theme file to render the collection block view",
+      ),
+      'theme_block_item' => array(
+        'type' => 'text',
+        'description' => "PHP that defines the way an item in the collection appears in block view",
+      ),
+      'theme_block_item_use_file' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "Whether or not to use a theme file to render the item block view",
+      ),
+      'provide_block' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "Whether or not to provide a block for the channel",
+      ),
+      'custom_filter' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "Whether or not the filter has been manually customized.",
+      ),
+    ),
+    'primary key' => array('nid','vid'),
+    'unique keys' => array(
+      'vid' => array('vid'),
+    ),
+    'indexes' => array(
+      'nid' => array('nid'),
+    ),
+  );
+  return $schema;
+}
+
+/**
+ * Add the custom_filter column
+ */
+function channel_update_7001() {
+  return db_add_field('channel', 'custom_filter', array(
+    'type' => 'int',
+    'size' => 'tiny',
+    'not null' => TRUE,
+    'default' => 0,
+    'description' => "Whether or not the filter has been manually customized.",
+  ));
+}

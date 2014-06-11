@@ -1,0 +1,13 @@
+name = Calendar Addon Functions
+description = Custom additions to the full calendar module
+core = 7.x
+package = FoundryCustom
+dependencies[] = fullcalendar
+
+
+; Information added by drupal.org packaging script on 2012-08-31
+version = "7.x-1.0
+core = "7.x"
+project = "foundrycustom"
+datestamp = "1329090638"
+

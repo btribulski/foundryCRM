@@ -1,0 +1,67 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for the node module.
+ */
+function fc_location_costs_install() {
+  
+}
+function fc_location_costs_uninstall() {
+  
+}
+
+
+/**
+ * Implements hook_schema().
+ */
+function fc_location_costs_schema() {
+  $schema['event_location_costs']= array(
+    'description' => 'Stores default costs for a location(room)',
+    'fields' => array(
+      'elcid' => array(
+        'description' => 'The primary identifier for a node.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      // Defaults to NULL in order to avoid a brief period of potential
+      // deadlocks on the index.
+      'location' => array(
+        'description' => 'The nid of the event',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'default' => NULL,
+      ),
+	  'season' => array(
+        'description' => 'The type of vendor for the event ',
+        'type' => 'varchar',
+        'length' => 100,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'day' => array(
+        'description' => 'Weekday or Weekend',
+        'type' => 'varchar',
+        'length' => 100,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+	  'cost' => array(
+        'description' => 'default cost of this room',
+        'type' => 'numeric',
+		'size' => 'normal',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'default' => NULL,
+      ),
+    ),
+    'unique keys' => array(
+      'elcid' => array('elcid'),
+    ),
+    'primary key' => array('elcid'),
+  );
+  
+  return $schema;
+}

@@ -1,0 +1,67 @@
+<?php
+
+function fc_calendar_addon_init(){
+	//drupal_add_js(drupal_get_path('module','fc_calendar_addon').'/js/fc_calendar_addon.fullcalendar.js');
+}
+
+/**
+* Implements hook_fullcalendar_api().
+*/
+function fc_calendar_addon_fullcalendar_api() {
+  return array(
+    'api' => fullcalendar_api_version(),
+  );
+}
+
+/**
+* Implements hook_fullcalendar_options_info().
+*/
+function fc_calendar_addon_fullcalendar_options_info() {
+  return array(
+    'fc_calendar_addon' => array(
+      'name' => t('Foundry Custom DayClick'),
+	  'js' => TRUE,
+      'no_fieldset' => TRUE,
+      'weight' => 5,
+    ),
+  );
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function fc_calendar_addon_form_alter(&$form, &$form_state, $form_id){
+	if ($form_id =='event_node_form'){
+	//if the event date is passed via day click set the default event date to be that value 
+		if(isset($_GET['event_date'])) {
+			$passed_info =  $_GET['event_date'];
+			//$passed_date = substr($passed_info,4,11);
+			$passed_date = substr($passed_info,4,20);
+			$time_offset = substr($passed_info,28,5); //have many hours off of GMT
+			
+			//Drupal works with GMT so we have to configure the passed date to be a GMT timestamp
+			switch(substr($time_offset,0,1)){
+				case '-':
+					$addthis = ( (intval(substr($time_offset,2,1))) * 60 *60);
+					$gmt_timestamp = intval(strtotime($passed_date)) + $addthis;
+					break;
+				case '+':
+					$addthis = ( (intval(substr($time_offset,2,1))) * 60 *60);
+					$gmt_timestamp = intval(strtotime($passed_date)) - $addthis;
+					break;	
+			}
+			
+			/*
+			drupal_set_message ('Passed Info: '. $passed_info);
+			drupal_set_message ('Time Offset: '. $time_offset);
+			
+			drupal_set_message ('Passed Date: '. date('m/d/Y H:i:s',strtotime($passed_date)));
+			drupal_set_message ('Passed Time: '. date('H:i',strtotime($passed_date)));
+			drupal_set_message ('GMT Date: '. date('m/d/Y',$gmt_timestamp));
+			drupal_set_message ('GMT Time: '. date('H:i',$gmt_timestamp));
+			*/
+			$form['field_event_date']['und'][0]['#default_value']['value'] = date('m/d/Y H:i:s',$gmt_timestamp);
+			$form['field_event_date']['und'][0]['#default_value']['value2'] = date('m/d/Y H:i:s',$gmt_timestamp);
+		}
+	}
+}

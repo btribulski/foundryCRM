@@ -1,0 +1,65 @@
+<?php
+
+function fc_custom_views_views_pre_execute(&$view) {
+  // (Example assuming a view with an exposed filter on node title.)
+  // If the input for the title filter is a positive integer, filter against
+  // node ID instead of node title.
+  if ($view->name == 'events_counts') {
+    $custom_query = db_select('node', 'n');
+	$custom_query->leftJoin('field_data_field_event_date', 'ed', "n.nid = ed.entity_id AND (ed.entity_type = 'node' AND ed.deleted = '0')");
+	$custom_query->addExpression("DATE_FORMAT(ed.field_event_date_value, '%M %Y')","field_data_field_event_date_field_event_date_value");
+	$custom_query->addExpression("COUNT(DISTINCT n.title)","node_title");
+	$custom_query->addExpression("MIN(n.nid)","nid");
+	$custom_query->addExpression("'node'","field_data_field_event_date_node_entity_type"); 
+	$custom_query->where("n.type IN  ('event')");
+	$custom_query->where("n.status=1");
+	$custom_query->groupBy("field_data_field_event_date_node_entity_type");
+	$custom_query->groupBy("field_data_field_event_date_field_event_date_value");
+	$custom_query->orderBy("ed.field_event_date_value","ASC");
+	
+	//dsm($custom_query->__toString());
+    $view->build_info['query'] = $custom_query;
+    
+  }
+}
+
+function fc_custom_views_views_query_alter(&$view, &$query){
+	if ($view->name == 'events_counts') {
+		//print_r($query);
+		//exit();
+	}
+}
+function fc_custom_views_get_formated_event_date($entity_id,$format='M Y') {
+	$query = db_select('field_data_field_event_date','d');
+	$query -> condition('entity_id',$entity_id)
+	       -> fields('d', array('field_event_date_value'));
+	$result = $query->execute();
+	foreach ($result as $row){
+		$event_date = date($format,strtotime($row->field_event_date_value));
+	}
+	return $event_date;
+}
+
+function fc_custom_views_form_alter(&$form, &$form_state, $form_id) {
+  //drupal_set_message($form_id);
+  if($form_id == 'views_exposed_form_test'){
+  	
+    $form['field_event_date_value_start'] = array
+		(
+		'#type' => 'date_popup',
+		'#title' => t('Date'),
+		'#date_format' =>'Y-m-d',
+		'#default_value' =>date('Y-m-d'),
+		);
+	$form['field_event_date_value_end'] = array
+		(
+		'#type' => 'date_popup',
+		'#title' => t('Date'),
+		'#date_format' =>'Y-m-d',
+		'#default_value' =>date('Y-m-d'),
+		);
+  }
+}
+
+
+?>

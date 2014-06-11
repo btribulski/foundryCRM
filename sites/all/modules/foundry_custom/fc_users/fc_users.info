@@ -1,0 +1,13 @@
+name = Foundry User Customization functionality
+description = Provides custom functionality for user accounts forthe event management system
+core = 7.x
+package = FoundryCustom
+//configure = admin/config/foundry-custom/users
+files[] = fc_users.module
+
+; Information added by drupal.org packaging script on 2012-08-31
+version = "7.x-1.0
+core = "7.x"
+project = "foundrycustom"
+datestamp = "1329090638"
+

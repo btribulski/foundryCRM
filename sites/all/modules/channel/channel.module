@@ -1,0 +1,672 @@
+<?php
+// $Id$
+
+/**
+ * @file
+ * Provides the "channel" node type.
+ *
+ * Why are channels implemented as nodes?
+ * - So they can go anywhere that nodes can go, and for future implementation of channels of channels
+ * Why is the filter just a plain sql query?
+ * - Because it will be replaced by a UI in the future.
+ *
+ * TODO - figure out how node preview should work when "Use Current Theme" is unchecked
+ * TODO - arguments into query?
+ *
+ * Created by Aaron Blondeau [aaronblondeau@gmail.com]
+ *
+ */
+ 
+/**
+ * Implementation of hook_node_info().
+ */
+function channel_node_info() {
+  return array(
+    'channel' => array(
+      'name' => t('Channel'),
+      'base' => 'channel',
+      'module' => 'channel',
+      'description' => t('Create a themed node collection.'),
+      'has_title' => TRUE,
+      'title_label' => t('Title'),
+      'locked' => TRUE,
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_menu_alter().
+ */
+function channel_menu_alter(&$callbacks) {
+  if(!user_access('administer nodes')){
+    $callbacks['node/add/channel']['access callback'] = FALSE;
+    unset($callbacks['node/add/channel']['access arguments']);
+  }
+}
+
+/**
+ * Implementation of hook_form().
+ */
+function channel_form($node, $form_state) {  
+  $t = get_t();
+  $type = _node_types_build()->types;
+  //Used for theme file path info
+  $nid = 'NODE_ID';
+  if(isset($node->nid)){
+    $nid = $node->nid;
+  }
+  $form['title'] = array(
+    '#type' => 'textfield',
+    '#title' => $t('Title'),
+    '#required' => FALSE,
+    '#default_value' => $node->title,
+    '#weight' => -5,
+    '#maxlength' => 255,
+  );
+  
+  $form['filter_builder'] = array(
+    '#markup' => theme('channel_filter_builder',array('node' => $node)),
+  );
+  
+  $form['filter'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Filter'),
+    '#required' => TRUE,
+    '#default_value' => isset($node->filter) ? $node->filter : '[{"fields":{"table_alias":"n","fields":["nid"]}},
+{"condition":{"field":"n.status","value":[1],"operator":"IN"}},
+{"condition":{"field":"n.type","value":["page"],"operator":"IN"}},
+{"orderBy":{"field":"n.created","direction":"DESC"}}]',
+    '#weight' => 1,
+    '#required' => FALSE,
+    '#description' => t('A JSON string representing actions to be processed by the query builder.  Each object represents a function call on a SelectQuery object from <a href="http://api.drupal.org/api/drupal/includes--database--database.inc/function/db_select/7">db_select</a>.  PHP will be evaluated. The only available variable is $channel (this channel node).  Also see <a href="http://api.drupal.org/api/drupal/includes--database--select.inc/class/SelectQuery/7">the Drupal SelectQuery object</a> for details.'),
+  );
+  
+  $form['custom_filter'] = array(
+    '#type' => 'checkbox',
+    '#title' => 'Custom filter',
+    '#description' => 'Prevents the query builder from overwriting the filter.',
+    '#default_value' => isset($node->custom_filter) ? $node->custom_filter : FALSE
+  );
+  
+  $form['page_theme'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Page Output'),
+    '#collapsible' => TRUE,
+    '#collapsed' => FALSE,
+    '#weight' => 2,
+  );
+  
+  $page_collection_default = '
+<?php   
+  foreach($nodes as $node){
+    echo channel_page_item($channel, $node)."<br/>";
+  }
+?>
+  ';
+  
+  $form['page_theme']['theme_page_use_default'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Use Current Theme'),
+    '#description' => t("If unchecked, the node output will not be wrapped by the current node and page templates.  Great for outputting xml, json, etc..."),
+    '#default_value' => isset($node->theme_page_use_default) ? $node->theme_page_use_default : TRUE,
+    '#weight' => -1,
+  );
+  
+  $form['page_theme']['page_limit'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Item Limit'),
+    '#default_value' => isset($node->page_limit) ? $node->page_limit : 20,
+    '#required' => FALSE,
+    '#weight' => 0,
+    '#description' => 'How many items to show per page.  Use 0 for no limit.'
+  );
+  
+  $form['page_theme']['theme_page_collection'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Collection Theme'),
+    '#required' => FALSE,
+    '#default_value' => isset($node->theme_page_collection) ? $node->theme_page_collection : $page_collection_default,
+    '#weight' => 1,
+    '#required' => FALSE,
+    '#description' => t('PHP that defines the way the collection as a whole appears in page view.  Do include php open and close tags.  Available variables are $nodes (the node collection) and $channel (this channel node).  Call <em>channel_page_item($channel, $node)</em> to pass a node to the item template below.'),
+  );
+  
+  $form['page_theme']['theme_page_collection_use_file'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Use File'),
+    '#description' => t("Create file %theme in your theme directory", array('%theme' => 'channel_'.$nid.'_page_collection.tpl.php')),
+    '#default_value' => isset($node->theme_page_collection_use_file) ? $node->theme_page_collection_use_file : FALSE,
+    '#weight' => 2,
+  );
+  
+  $page_item_default = '
+<a href="<?php echo url(\'node/\'.$node->nid); ?>"><h2><?php echo $node->title; ?></h2></a>
+<?php 
+$teaser = node_view($node,\'teaser\');
+echo $teaser[\'body\'][0][\'#markup\'];
+?>
+  ';
+  
+  $form['page_theme']['theme_page_item'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Item Theme'),
+    '#required' => FALSE,
+    '#default_value' => isset($node->theme_page_item) ? $node->theme_page_item : $page_item_default,
+    '#weight' => 3,
+    '#required' => FALSE,
+    '#description' => t('PHP that defines the way an item in the collection appears in page view.  Do include php open and close tags.  Available variables are $node (the current node in the collection) and $channel (this channel node).')
+  );
+  
+  $form['page_theme']['theme_page_item_use_file'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Use File'),
+    '#description' => t("Create file %theme in your theme directory.  You can also use a node type specific file as well like %node_theme.  If your collection will contain nodes of different types, be sure to handle each appropriately.", array('%theme' => 'channel_'.$nid.'_page_item.tpl.php', '%node_theme' => 'channel_'.$nid.'_page_item_NODE_TYPE.tpl.php')),
+    '#default_value' => isset($node->theme_page_item_use_file) ? $node->theme_page_item_use_file : FALSE,
+    '#weight' => 4,
+  );
+  
+  $form['block_theme'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Block Output'),
+    '#collapsible' => TRUE,
+    '#collapsed' => TRUE,
+    '#weight' => 3,
+  );
+  
+  if(isset($node->provide_block) && $node->provide_block){
+    $form['block_theme']['#collapsed'] = FALSE;
+  }
+  
+  $form['block_theme']['provide_block'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Provide Block'),
+    '#default_value' => isset($node->provide_block) ? $node->provide_block : FALSE,
+    '#weight' => 0,
+  );
+  
+  $form['block_theme']['block_limit'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Item Limit'),
+    '#default_value' => isset($node->block_limit) ? $node->block_limit : 5,
+    '#required' => FALSE,
+    '#weight' => 1,
+    '#description' => 'How many items to show in the block.  Use 0 for no limit.'
+  );
+  
+  $block_collection_default = '
+<?php   
+  foreach($nodes as $node){
+    echo channel_block_item($channel, $node)."<br/>";
+  }
+?>
+  ';
+  
+  $form['block_theme']['theme_block_collection'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Collection Theme'),
+    '#required' => FALSE,
+    '#default_value' => isset($node->theme_block_collection) ? $node->theme_block_collection : $block_collection_default,
+    '#weight' => 2,
+    '#required' => FALSE,
+    '#description' => t('PHP that defines the way the collection as a whole appears in block view.  Do include php open and close tags. Available variables are $nodes (the node collection) and $channel (this channel node).  Call <em>channel_block_item($channel, $node)</em> to pass a node to the item template below.'),
+  );
+  
+  $form['block_theme']['theme_block_collection_use_file'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Use File'),
+    '#description' => t("Create file %theme in your theme directory", array('%theme' => 'channel_'.$nid.'_block_collection.tpl.php')),
+    '#default_value' => isset($node->theme_block_collection_use_file) ? $node->theme_block_collection_use_file : FALSE,
+    '#weight' => 3,
+  );
+    
+  $block_item_default = '
+<a href="<?php echo url(\'node/\'.$node->nid); ?>"><?php echo $node->title; ?></a>
+<?php 
+$teaser = node_view($node,\'teaser\');
+echo $teaser[\'body\'][0][\'#markup\'];
+?>
+  ';
+    
+  $form['block_theme']['theme_block_item'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Item Theme'),
+    '#required' => FALSE,
+    '#default_value' => isset($node->theme_block_item) ? $node->theme_block_item : $block_item_default,
+    '#weight' => 4,
+    '#required' => FALSE,
+    '#description' => t('PHP that defines the way an item in the collection appears in block view. If empty, teaser will be used.  Available variables are $node (the current node in the collection) and $channel (this channel node).')
+  );
+  
+  $form['block_theme']['theme_block_item_use_file'] = array(
+    '#type' => 'checkbox',
+    '#title' => 'Use File',
+    '#description' => t("Create file %theme in your theme directory.  You can also use a node type specific file as well like %node_theme.  If your collection will contain nodes of different types, be sure to handle each appropriately.", array('%theme' => 'channel_'.$nid.'_block_item.tpl.php', '%node_theme' => 'channel_'.$nid.'_block_item_NODE_TYPE.tpl.php')),
+    '#default_value' => isset($node->theme_block_item_use_file) ? $node->theme_block_item_use_file : FALSE,
+    '#weight' => 5,
+  );
+  
+  return $form;
+}
+
+/**
+ * Implementation of hook_validate($node)
+ */
+/*function channel_validate($node) {
+  //make sure limits are #'s
+  //validate php if possible?
+  //make sure call to exit not in php fields
+  //make sure query returns an nid column if possible
+  //make sure filter is valid json
+}*/
+
+/**
+ * Implementation of hook_insert().
+ */
+function channel_insert($node){
+  $data = array(
+    'nid' => $node->nid, 
+    'vid' => $node->vid, 
+    'filter' => $node->filter, 
+    'page_limit' => $node->page_limit,
+    'block_limit' => $node->block_limit,
+    'theme_page_use_default' => $node->theme_page_use_default,
+    'theme_page_collection' => $node->theme_page_collection, 
+    'theme_page_collection_use_file' => $node->theme_page_collection_use_file,
+    'theme_page_item' => $node->theme_page_item,
+    'theme_page_item_use_file' => $node->theme_page_item_use_file,
+    'theme_block_collection' => $node->theme_block_collection,
+    'theme_block_collection_use_file' => $node->theme_block_collection_use_file,
+    'theme_block_item' => $node->theme_block_item,
+    'theme_block_item_use_file' => $node->theme_block_item_use_file,
+    'provide_block' => $node->provide_block,
+    'custom_filter' => $node->custom_filter
+  );
+  db_insert('channel')->fields($data)->execute();
+}
+
+/**
+ * Implementation of hook_update().
+ */
+function channel_update($node){    
+  if($node->revision){
+    channel_insert($node);
+  }
+  else{
+    $data = array(
+      'filter' => $node->filter, 
+      'page_limit' => $node->page_limit,
+      'block_limit' => $node->block_limit,
+      'theme_page_use_default' => $node->theme_page_use_default,
+      'theme_page_collection' => $node->theme_page_collection, 
+      'theme_page_collection_use_file' => $node->theme_page_collection_use_file,
+      'theme_page_item' => $node->theme_page_item,
+      'theme_page_item_use_file' => $node->theme_page_item_use_file,
+      'theme_block_collection' => $node->theme_block_collection,
+      'theme_block_collection_use_file' => $node->theme_block_collection_use_file,
+      'theme_block_item' => $node->theme_block_item,
+      'theme_block_item_use_file' => $node->theme_block_item_use_file,
+      'provide_block' => $node->provide_block,
+      'custom_filter' => $node->custom_filter
+    );
+    db_update('channel')->fields($data)->condition('vid', $node->vid, '=')->execute();
+  }
+}
+
+/**
+ * Implementation of hook_delete().
+ */
+function channel_delete($node){
+  //db_query("DELETE FROM {channel} WHERE nid = :nid", array(':nid' => $node->nid));
+  db_delete('channel')->condition('nid',$node->nid)->execute();
+  _block_rehash();
+}
+
+/**
+ * Implementation of hook_load().
+ */
+function channel_load($nodes){
+  
+  foreach($nodes as $node){
+    $result = db_query("SELECT * FROM {channel} WHERE nid = :nid", array(':nid' => $node->nid));
+    $channel = $result->fetchAssoc();
+    foreach($channel as $key => $value) {
+      $node->{$key} = $value;
+    }
+  }
+  
+}
+
+/**
+ * Implementation of hook_view().
+ */
+function channel_view($node, $view_mode) {
+  if($view_mode == 'full') {
+    $node->content['collection'] = array(
+      '#markup' => theme('channel_page_collection', array('node' => $node)),
+      '#weight' => 2,
+    );
+  }
+  return $node;
+}
+
+/**
+ * Implementation of hook_theme().
+ */
+function channel_theme() {
+  return array(
+    'channel_page_collection' => array(
+      'variables' => array('channel' => NULL),
+    ),
+    'channel_page_item' => array(
+      'variables' => array('channel' => NULL, 'node' => NULL),
+    ),
+    'channel_block_collection' => array(
+      'variables' => array('channel' => NULL),
+    ),
+    'channel_block_item' => array(
+      'variables' => array('channel' => NULL, 'node' => NULL),
+    ),
+    'channel_filter_builder' => array(
+      'template' => 'channel_filter_builder',
+      'variables' => array('node' => NULL),
+    ),
+  );
+}
+
+/**
+ * Helper function to return a list of nodes from the filter query.
+ *
+ * @param $channel
+ *   node
+ *   The channel node
+ * @param $page
+ *   boolean
+ *   Wether the output is for a page or for a block
+ * @return
+ *   array
+ *   The node collection for the channel - paged if necessary
+ */
+function channel_get_nodes($channel, $page = TRUE) {  
+  //use $channel->filter and $channel->page_limit or $channel->block_limit to get a list of nodes
+  
+  $filter = $channel->filter;
+  $filter = channel_eval_filter($filter, $channel);
+  
+  $filter_obj = json_decode($filter);
+  //drupal_set_message('<pre>json:'.print_r(json_decode($filter),true).'</pre>');
+  
+  $query = NULL;
+  
+  //add in paging if necessary
+  if($page){
+    if($channel->page_limit > 0){
+      $query = db_select('node', 'n')->extend('PagerDefault')->limit($channel->page_limit);
+    }
+  }
+  else{
+    if($channel->block_limit > 0){
+      $query = db_select('node', 'n')->extend('PagerDefault')->limit($channel->block_limit);
+    }
+  }
+  
+  if(!$query){
+    $query = db_select('node', 'n');
+  }
+  
+  //http://drupal.org/node/310086
+  foreach($filter_obj as $statement){
+    foreach($statement as $method => $arguments){
+        call_user_func_array(array($query,$method),$arguments);
+    }
+  }
+  
+  $result = $query->execute();
+        
+  $nodes = array();
+  foreach($result as $row){
+    $nodes[] = node_load($row->nid);
+  }
+  return $nodes;
+}
+
+/**
+ * Creates the page mode output for the channel.
+ *
+ * @param $channel
+ *   node
+ *   The channel node
+ * @return
+ *   string
+ *   The themed collection of nodes with pager if necessary
+ */
+function theme_channel_page_collection($variables) {
+  $channel = $variables['node'];
+  $nodes = channel_get_nodes($channel);
+  $tpl = $channel->theme_page_collection;
+  if($channel->theme_page_collection_use_file){
+    $tpl_file = channel_get_file($channel, 'page_collection', NULL);
+    if($tpl_file){
+      $tpl = $tpl_file;
+    }
+  }
+  
+  $output = channel_eval_nodes($tpl, $channel, $nodes);
+  
+  if(($channel->page_limit > 0) and ($channel->theme_page_use_default)){
+    $output = $output . theme('pager',array('quantity' => $channel->page_limit));
+  }
+  
+  if(!$channel->theme_page_use_default){
+    echo $output;
+    exit(0);
+  }
+  
+  return $output;
+}
+
+/**
+ * Alias for theme_channel_page_item to make it more user friendly and easier to call in the edit page.
+ */
+function channel_page_item($channel, $node) {
+  return theme('channel_page_item', array('channel' => $channel, 'node' => $node));
+}
+
+/**
+ * Creates the page mode output for each item in the channel.
+ *
+ * @param $channel
+ *   node
+ *   The channel node
+ * @param $node
+ *   node
+ *   A single node from the collection
+ * @return
+ *   string
+ *   The themed node
+ */
+function theme_channel_page_item($variables) {
+  $channel = $variables['channel'];
+  $node = $variables['node'];
+  $tpl = $channel->theme_page_item;
+  if($channel->theme_page_item_use_file){
+    $tpl_file = channel_get_file($channel, 'page_item', $node);
+    if($tpl_file){
+      $tpl = $tpl_file;
+    }
+  }
+  return channel_eval_node($tpl, $channel, $node);
+}
+
+/**
+ * Gets the template file for a channel.
+ *
+ * @param $channel
+ *   node
+ *   the channel node
+ * @param $type
+ *   string
+ *   The type of template to find. One of the following: channel_page_collection, channel_page_item, channel_block_collection, channel_block_item.
+ * @return
+ *   string
+ *   the template to use
+ */
+function channel_get_file($channel, $type, $node){
+  global $theme;
+  $theme_path = drupal_get_path('theme',$theme);
+  
+  $file = NULL;
+  //look for file that matches node type first, then go to generic
+  if((($node) and (($type == 'channel_page_item') or ($type == 'channel_block_item'))) and (file_exists($theme_path.'/channel_'.$channel->nid.'_'.$type.'_'.$node->type.'.tpl.php'))){
+    $file = $theme_path.'/channel_'.$channel->nid.'_'.$type.'_'.$node->type.'.tpl.php';
+  }
+  else if(file_exists($theme_path.'/channel_'.$channel->nid.'_'.$type.'.tpl.php')){
+    $file = $theme_path.'/channel_'.$channel->nid.'_'.$type.'.tpl.php';
+  }
+  
+  if (isset($file) && $file) {
+    return file_get_contents($file);
+  }
+  return FALSE;
+}
+
+/**
+ * Copy of drupal_eval(), but extracts the node object so that variables are available to the template
+ * BORROWED FROM CONTEMPLATE
+ *
+ * @param $tmplt
+ *   text
+ *   the template code
+ * @param $obj
+ *   object
+ *   an object to extract into the local variables
+ * @return
+ *   string
+ *   executed template code
+ */
+function channel_eval_node($tmplt, $channel_obj, $node_obj) {
+  extract((array)$node_obj);
+  extract((array)$channel_obj);
+  $node = $node_obj;
+  $channel = $channel_obj;
+  ob_start();
+  print eval('?>'. $tmplt);
+  $output = ob_get_contents();
+  ob_end_clean();
+  return $output;
+}
+
+/**
+ * Same as channel_eval_node except uses $nodes as local variable name to help avoid confusion
+ */
+function channel_eval_nodes($tmplt, $channel_obj, $nodes_obj) {    
+  extract((array)$nodes_obj);
+  extract((array)$channel_obj);
+  $nodes = $nodes_obj;
+  $channel = $channel_obj;
+  ob_start();
+  print eval('?>'. $tmplt);
+  $output = ob_get_contents();
+  ob_end_clean();
+  return $output;
+}
+
+/**
+ * Same as channel_eval_node except evaluates the filter text
+ */
+function channel_eval_filter($filter, $channel_obj){
+  extract((array)$channel_obj);
+  $channel = $channel_obj;
+  ob_start();
+  print eval('?>'. $filter);
+  $output = ob_get_contents();
+  ob_end_clean();
+  return $output;
+}
+
+/**
+ * Implements hook_block_info().
+ */
+function channel_block_info() {
+  $t = get_t();
+  $blocks = array();
+  $result = db_query("SELECT n.nid FROM {node} n RIGHT JOIN {channel} p on n.nid = p.nid WHERE n.type = 'channel' AND n.status = 1 AND p.provide_block = 1 ORDER BY n.nid");
+  foreach($result as $row){
+    $channel = node_load($row->nid);
+    $blocks['channel_'.$row->nid]['info'] = $t('Channel: ').$channel->title;
+    $blocks['channel_'.$row->nid]['properties']['administrative'] = TRUE;
+  }
+  return $blocks;
+}
+
+/**
+ * Implements hook_block_view().
+ */
+function channel_block_view($delta = '') {
+  if (user_access('access content')) {
+    if(preg_match('/channel_(\d+)/', $delta, $matches)){
+      $nid = $matches[1];
+      $channel = node_load($nid);
+      if($channel){
+        $block['subject'] = $channel->title;
+        $block['content'] = theme('channel_block_collection', array('channel' => $channel));
+        return $block;
+      }
+    }
+  }
+}
+
+/**
+ * Creates the block mode output for the channel.
+ *
+ * @param $channel
+ *   node
+ *   The channel node
+ * @return
+ *   string
+ *   The themed collection of nodes
+ */
+function theme_channel_block_collection($variables) {
+  $channel = $variables['channel'];
+  $nodes = channel_get_nodes($channel, FALSE);
+  $tpl = $channel->theme_block_collection;
+  if($channel->theme_block_collection_use_file){
+    $tpl_file = channel_get_file($channel, 'block_collection', NULL);
+    if($tpl_file){
+      $tpl = $tpl_file;
+    }
+  }
+  return channel_eval_nodes($tpl, $channel, $nodes);
+}
+
+/**
+ * Alias for theme_channel_block_item to make it more user friendly and easier to call in the edit page.
+ */
+function channel_block_item($channel, $node) {
+  return theme('channel_block_item', array('channel' => $channel, 'node' => $node));
+}
+
+/**
+ * Creates the block mode output for each item in the channel.
+ *
+ * @param $channel
+ *   node
+ *   The channel node
+ * @param $node
+ *   node
+ *   A single node from the collection
+ * @return
+ *   string
+ *   The themed collection of nodes
+ */
+function theme_channel_block_item($variables) {
+  $channel = $variables['channel'];
+  $node = $variables['node'];
+  $tpl = $channel->theme_block_item;
+  if($channel->theme_block_item_use_file){
+    $tpl_file = channel_get_file($channel, 'block_item', $node);
+    if($tpl_file){
+      $tpl = $tpl_file;
+    }
+  }
+  return channel_eval_node($tpl, $channel, $node);
+}
